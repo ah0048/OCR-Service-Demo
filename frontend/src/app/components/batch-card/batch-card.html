@@ -23,6 +23,11 @@
 
   <div class="stats">
     <div><small>Completed</small><b class="num">{{ batch().completed }} / {{ total() }}</b></div>
+    <div class="total">
+      <small>{{ isDone() ? 'Total time' : 'Elapsed' }}</small>
+      <b class="num">{{ totalTime() }}</b>
+      @if (!isDone()) { <span class="est num">est. total {{ estimatedTotal() }}</span> }
+    </div>
     <div><small>Speed</small><b class="num">{{ isDone() ? '—' : rate().toFixed(2) + ' jobs/s' }}</b></div>
     <div><small>ETA</small><b class="num">{{ isDone() ? '—' : etaText() }}</b></div>
     <div><small>Success rate</small><b class="num">{{ successRate() }}</b></div>

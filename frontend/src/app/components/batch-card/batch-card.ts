@@ -1,7 +1,7 @@
 import { Component, computed, inject, input } from '@angular/core';
 import { Router } from '@angular/router';
 import { DashboardStore } from '../../core/dashboard-store';
-import { ago, between, duration, eta, pct, shortId } from '../../core/fmt';
+import { ago, between, duration, eta, pct, shortId, utc } from '../../core/fmt';
 import { BatchSummary, OUTCOME_COLOR } from '../../core/models';
 import { Seg, SegBar } from '../seg-bar/seg-bar';
 
@@ -22,6 +22,21 @@ export class BatchCard {
   isDone = computed(() => this.batch().completed >= this.batch().total);
   percent = computed(() => pct(this.batch().completed, this.batch().total));
   took = computed(() => duration(between(this.batch().createdAt, this.batch().lastCompletedAt)));
+
+  /** ticks with every live snapshot, so the elapsed time keeps counting while the batch is processing */
+  private now = computed(() => { this.store.tick(); return Date.now(); });
+  elapsedMs = computed(() => {
+    const b = this.batch();
+    return this.isDone()
+      ? between(b.createdAt, b.lastCompletedAt) ?? 0
+      : Math.max(0, this.now() - new Date(utc(b.createdAt)).getTime());
+  });
+  totalTime = computed(() => duration(this.elapsedMs()));
+  /** elapsed so far + ETA; only meaningful once the batch has a measurable speed */
+  estimatedTotal = computed(() => {
+    const etaSec = this.store.batchRates()[this.batch().id]?.etaSec;
+    return etaSec == null ? '—' : duration(this.elapsedMs() + etaSec * 1000);
+  });
   rate = computed(() => this.store.batchRates()[this.batch().id]?.rate ?? 0);
   etaText = computed(() => eta(this.store.batchRates()[this.batch().id]?.etaSec));
   successRate = computed(() => pct(this.batch().succeeded, this.batch().completed));

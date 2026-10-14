@@ -6,9 +6,14 @@ A proof-of-concept showing how thousands of ID-image OCR jobs can be processed a
 POST /api/jobs ─► OcrDemo.Api ─► PostgreSQL (job saved first)
                       │
                       └─► RabbitMQ [ocr-jobs] ─► Python OCR worker ×N ─► RabbitMQ [ocr-results]
-                                                                                │
-GET /api/jobs/{id} ◄── PostgreSQL ◄── OcrDemo.BusinessWorker ×M ◄───────────────┘
+                                                     │                          │
+                                  [job-events] ◄─────┘ (side channel:           │
+                                       │        "OCR started", dashboard only)  │
+                                       ▼                                        ▼
+GET /api/jobs/{id} ◄── PostgreSQL ◄── OcrDemo.BusinessWorker ×M (consumes both queues)
 ```
+
+Queues: `ocr-jobs` (work), `ocr-results` (OCR output), and `job-events` (best-effort "OCR started" notices so the dashboard can show a job as in progress; nothing depends on it).
 
 See [architecture.md](architecture.md) for details and [context.md](context.md) for project state.
 
