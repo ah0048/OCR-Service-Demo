@@ -28,3 +28,5 @@ Results page: `GET /api/results/stream` (SSE, polls the DB every 500 ms, re-chec
 - No attempt limit on requeue; `TechnicalError` outcome is never persisted; no outbox (documented limitations).
 - Containerizing the apps (Dockerfiles) is only described in the README.
 - Dashboard has no automated tests; verified with headless Edge screenshots. Latency stats use the last 5 minutes of completions. Chart history starts empty on page load (client-side).
+
+UI sizing: everything is rem-based and scales with screen width and the A-/A+ control (see frontend/README.md, 'Large, clear display'). Do not reintroduce fixed px sizes or screen-pixel media queries; use rem and @container queries.

@@ -5,11 +5,11 @@
         <b class="num">{{ latest(s.key) }}</b></span>
     }
   </div>
+  <div class="plot">
   <svg [attr.viewBox]="'0 0 ' + W + ' ' + H" preserveAspectRatio="none" class="chart"
        (mousemove)="move($event)" (mouseleave)="hover.set(null)">
     @for (g of grid(); track g.y) {
       <line [attr.x1]="padL" [attr.x2]="W" [attr.y1]="g.y" [attr.y2]="g.y" stroke="#e8ecf4" stroke-width="1" />
-      <text [attr.x]="padL - 8" [attr.y]="g.y + 4" text-anchor="end" class="axis">{{ g.label }}</text>
     }
     @for (p of paths(); track p.key) {
       @if (p.area) { <path [attr.d]="p.areaD" [attr.fill]="p.color" opacity="0.12" /> }
@@ -19,6 +19,10 @@
       <line [attr.x1]="hx" [attr.x2]="hx" [attr.y1]="padT" [attr.y2]="H - padB" stroke="#94a0b8" stroke-dasharray="3 3" />
     }
   </svg>
+  <div class="ylabels">
+    @for (g of grid(); track g.y) { <span [style.top.%]="g.y / H * 100">{{ g.label }}</span> }
+  </div>
+  </div>
   @if (tip(); as t) {
     <div class="tip" [style.left.%]="t.leftPct">
       <div class="tt">{{ t.time }}</div>

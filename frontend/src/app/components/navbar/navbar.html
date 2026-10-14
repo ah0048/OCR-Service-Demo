@@ -18,6 +18,11 @@
     </div>
 
     <div class="right">
+      <div class="textsize" role="group" aria-label="Text size">
+        <button (click)="ui.smaller()" [disabled]="!ui.canShrink()" aria-label="Smaller text" title="Smaller text">A&minus;</button>
+        <span class="num" title="Current text size">{{ ui.percent() }}%</span>
+        <button class="plus" (click)="ui.bigger()" [disabled]="!ui.canGrow()" aria-label="Larger text" title="Larger text">A+</button>
+      </div>
       <span class="live" [class.off]="!store.connected()">
         <i></i>{{ store.connected() ? 'Live' : 'Reconnecting' }}
       </span>

@@ -1,84 +1,84 @@
-.ctl { display: flex; align-items: center; gap: 12px; }
+.ctl { display: flex; align-items: center; gap: 0.75rem; }
 
-.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.filters { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
 .pill {
-  display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line-strong); background: #fff; border-radius: 999px;
-  padding: 6px 14px; cursor: pointer; font-weight: 550; transition: all 0.18s var(--ease);
+  display: inline-flex; align-items: center; gap: 0.5rem; border: 1px solid var(--line-strong); background: #fff; border-radius: 62.4375rem;
+  padding: 0.375rem 0.875rem; cursor: pointer; font-weight: 550; transition: all 0.18s var(--ease);
 }
-.pill i { width: 9px; height: 9px; border-radius: 3px; }
+.pill i { width: 0.5625rem; height: 0.5625rem; border-radius: 0.1875rem; }
 .pill b { color: var(--muted); font-weight: 600; }
 .pill:hover { border-color: var(--navy-600); }
 .pill.on { background: var(--navy-700); border-color: var(--navy-700); color: #fff; }
 .pill.on b { color: #c9d6f5; }
 
 .newbar {
-  display: block; width: 100%; margin-bottom: 14px; border: 1px dashed var(--gold); background: var(--gold-soft); color: #7a5604;
-  border-radius: 12px; padding: 10px; font-weight: 650; cursor: pointer;
+  display: block; width: 100%; margin-bottom: 0.875rem; border: 1px dashed var(--gold); background: var(--gold-soft); color: #7a5604;
+  border-radius: 0.75rem; padding: 0.625rem; font-weight: 650; cursor: pointer;
 }
 .newbar:hover { filter: brightness(0.97); }
 
 .rows { display: flex; flex-direction: column; }
 
 // Each card sits in a "slot". A new slot opens from zero height to full height (pushing the older cards down
-// smoothly) while the card itself slides in from the left. The 14px spacing lives inside the slot so it animates too.
+// smoothly) while the card itself slides in from the left. The 0.875rem spacing lives inside the slot so it animates too.
 .slot { display: grid; grid-template-rows: 1fr; }
-.clip { min-height: 0; padding-bottom: 14px; }
+.clip { min-height: 0; padding-bottom: 0.875rem; }
 .slot.fresh { animation: slot-open 0.65s var(--ease); }
 .slot.fresh .clip { overflow: hidden; }
 .slot.fresh .row { animation: slide-in 0.8s var(--ease); }
 
 @keyframes slot-open { from { grid-template-rows: 0fr; } to { grid-template-rows: 1fr; } }
 @keyframes slide-in {
-  from { opacity: 0; transform: translateX(-90px); box-shadow: 0 0 0 3px rgba(225, 168, 45, 0.6); }
+  from { opacity: 0; transform: translateX(-5.625rem); box-shadow: 0 0 0 0.1875rem rgba(225, 168, 45, 0.6); }
   55%  { opacity: 1; }
   to   { transform: none; }
 }
 
 .row {
   display: grid;
-  grid-template-columns: 250px minmax(260px, 1fr) minmax(300px, 1.15fr);
-  gap: 22px;
+  grid-template-columns: 15.625rem minmax(16.25rem, 1fr) minmax(18.75rem, 1.15fr);
+  gap: 1.375rem;
   align-items: stretch;
 }
 
-.img { display: flex; flex-direction: column; gap: 8px; }
-.imgname { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.img { display: flex; flex-direction: column; gap: 0.5rem; }
+.imgname { color: var(--muted); font-size: 0.7188rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.meta { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.when { margin-left: auto; font-size: 12.5px; }
+.meta { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+.line { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.when { margin-left: auto; font-size: 0.7812rem; }
 
-dl { display: grid; grid-template-columns: 86px 1fr; gap: 7px 10px; margin: 0; font-size: 13px; }
+dl { display: grid; grid-template-columns: 5.375rem 1fr; gap: 0.4375rem 0.625rem; margin: 0; font-size: 0.8125rem; }
 dt { color: var(--muted); }
 dd { margin: 0; word-break: break-all; }
-.confcell { display: flex; align-items: center; gap: 10px; }
-.conf { width: 90px; height: 7px; border-radius: 7px; background: #e9edf5; overflow: hidden; }
-.conf i { display: block; height: 100%; border-radius: 7px; }
-.reasons { display: flex; flex-wrap: wrap; gap: 6px; }
+.confcell { display: flex; align-items: center; gap: 0.625rem; }
+.conf { width: 5.625rem; height: 0.4375rem; border-radius: 0.4375rem; background: #e9edf5; overflow: hidden; }
+.conf i { display: block; height: 100%; border-radius: 0.4375rem; }
+.reasons { display: flex; flex-wrap: wrap; gap: 0.375rem; }
 .meta .btn { align-self: flex-start; margin-top: auto; }
 
 .mini {
-  border: 1px solid var(--line-strong); background: #fff; border-radius: 6px; padding: 1px 8px; font-size: 11px; cursor: pointer; color: var(--muted);
-  margin-left: 6px;
+  border: 1px solid var(--line-strong); background: #fff; border-radius: 0.375rem; padding: 1px 0.5rem; font-size: 0.6875rem; cursor: pointer; color: var(--muted);
+  margin-left: 0.375rem;
 }
 .mini:hover { color: var(--navy-600); border-color: var(--navy-600); }
 .mini.light { background: transparent; border-color: rgba(255, 255, 255, 0.25); color: #b9c6e6; }
 .mini.light:hover { color: #fff; border-color: #fff; }
 
-.json { display: flex; flex-direction: column; min-width: 0; background: #0d1b3e; border-radius: 12px; }
+.json { display: flex; flex-direction: column; min-width: 0; background: #0d1b3e; border-radius: 0.75rem; }
 .jhead {
-  display: flex; justify-content: space-between; align-items: center; padding: 10px 14px 0; color: #8fa2cf; font-size: 11px;
+  display: flex; justify-content: space-between; align-items: center; padding: 0.625rem 0.875rem 0; color: #8fa2cf; font-size: 0.6875rem;
   text-transform: uppercase; letter-spacing: 0.07em;
 }
 .json app-json-view { flex: 1; min-height: 0; }
-.json app-json-view ::ng-deep .json { border-radius: 0 0 12px 12px; max-height: 380px; }
+.json app-json-view ::ng-deep .json { border-radius: 0 0 0.75rem 0.75rem; max-height: 23.75rem; }
 
-.more { display: flex; justify-content: center; margin-top: 18px; }
+.more { display: flex; justify-content: center; margin-top: 1.125rem; }
 
-@media (max-width: 1150px) {
-  .row { grid-template-columns: 220px 1fr; }
+@container (max-width: 72rem) {
+  .row { grid-template-columns: 13.75rem 1fr; }
   .json { grid-column: 1 / -1; }
 }
-@media (max-width: 700px) {
+@container (max-width: 44rem) {
   .row { grid-template-columns: 1fr; }
 }

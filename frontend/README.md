@@ -32,3 +32,12 @@ src/app/
   app.*         root component, routes, config
 ```
 Each component folder holds `name.ts`, `name.html` and `name.scss`. Global design tokens and shared classes (cards, buttons, chips, tables, bars) live in `src/styles.scss`.
+
+## Large, clear display
+Built for people who need big text and for wall-sized or full-HD screens:
+- The page uses the **full screen width** (no maximum width).
+- Everything is sized in `rem`, and the root font size follows the screen width (about 23px on a 1920px display, 17px on a laptop). One rule in `src/styles.scss` controls it.
+- **A- / A+ in the header** lets each person pick their own size (90% to 170%); the choice is remembered in the browser (`core/ui-settings.ts`).
+- Layout breakpoints are **container queries in rem** (not screen pixels), so a larger text size automatically gets fewer columns instead of overflowing; the live pipeline diagram turns vertical when it runs out of room.
+- Greys were darkened for contrast and keyboard focus is clearly outlined.
+Text inside SVG drawings (the donut) is sized in SVG units on purpose.

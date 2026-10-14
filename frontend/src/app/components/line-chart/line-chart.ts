@@ -14,7 +14,7 @@ export class LineChart {
   integer = input(false);
   limit = input(150);
 
-  readonly W = 600; readonly H = 190; readonly padL = 36; readonly padT = 8; readonly padB = 6;
+  readonly W = 600; readonly H = 190; readonly padL = 0; readonly padT = 8; readonly padB = 6;
   hover = signal<number | null>(null);
 
   private max = computed(() => {
