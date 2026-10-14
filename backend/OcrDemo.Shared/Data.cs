@@ -1,11 +1,12 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
-using Microsoft.EntityFrameworkCore;
 
 namespace OcrDemo.Shared;
 
-public enum JobStatus { Queued, Completed }
+/// <summary>Queued: saved and published. OcrInProgress: an OCR worker picked it up. Completed: business processing done.</summary>
+public enum JobStatus { Queued, OcrInProgress, Completed }
 
 public enum JobOutcome { Succeeded, ValidationFailed, ManualReview, OcrFailed, TechnicalError }
 
@@ -13,6 +14,8 @@ public class Job
 {
     public Guid Id { get; set; }
     public Guid CorrelationId { get; set; }
+    public Guid? BatchId { get; set; }
+    public string? BatchName { get; set; }
     public string ClientReference { get; set; } = "";
     public string ImageReference { get; set; } = "";
     public JobStatus Status { get; set; }
@@ -23,6 +26,8 @@ public class Job
     public string? OcrOutcome { get; set; }
     public int? OcrDurationMs { get; set; }
     public string? ModelVersion { get; set; }
+    public string? OcrWorkerId { get; set; }
+    public string? BusinessWorkerId { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
@@ -44,6 +49,8 @@ public class OcrDbContext(DbContextOptions<OcrDbContext> options) : DbContext(op
             e.Property(j => j.ReasonCodes).HasColumnType("jsonb");
             e.Property(j => j.ExtractedFields).HasColumnType("jsonb");
             e.HasIndex(j => j.Status);
+            e.HasIndex(j => j.BatchId);
+            e.HasIndex(j => j.CreatedAt);
         });
     }
 }

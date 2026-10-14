@@ -1,0 +1,4 @@
+.donut { width: 100%; max-width: 190px; display: block; margin: 0 auto; }
+.arc { transition: stroke-dasharray 0.6s cubic-bezier(0.22, 0.8, 0.3, 1), stroke-dashoffset 0.6s cubic-bezier(0.22, 0.8, 0.3, 1); }
+.big { font-size: 20px; font-weight: 700; fill: #16213e; }
+.small { font-size: 8.5px; fill: #64718c; text-transform: uppercase; letter-spacing: 0.06em; }

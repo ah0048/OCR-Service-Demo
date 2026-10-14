@@ -1,0 +1,105 @@
+<div class="page">
+  <div class="page-head">
+    <div>
+      <h1>Queues &amp; workers</h1>
+      <p>Live RabbitMQ and worker state, so you never need the RabbitMQ dashboard. Queues use fair dispatch (prefetch = 1).</p>
+    </div>
+    @if (snap(); as s) {
+      @if (!s.rabbitAvailable) { <span class="chip bad">RabbitMQ management API unreachable</span> }
+    }
+  </div>
+
+  <div class="grid cols-3">
+    @for (q of mainQueues(); track q.name) {
+      <div class="card qcard">
+        <div class="qh">
+          <div><h3 class="mono">{{ q.name }}</h3><span class="muted">{{ desc(q.name) }}</span></div>
+          <span class="chip" [class]="q.consumers > 0 ? 'ok' : 'bad'">{{ q.consumers }} consumer{{ q.consumers === 1 ? '' : 's' }}</span>
+        </div>
+        <div class="big">
+          <div><b class="num">{{ q.ready }}</b><span>Ready</span></div>
+          <div><b class="num">{{ q.unacked }}</b><span>Unacked</span></div>
+          <div><b class="num">{{ q.total }}</b><span>Total</span></div>
+        </div>
+        <app-seg-bar [segments]="[
+          { value: q.ready, color: '#2f6fed', label: 'Ready' },
+          { value: q.unacked, color: '#1f9d6b', label: 'Unacked', striped: true }]" size="sm" />
+        <div class="rates">
+          <span>in <b class="num">{{ q.publishRate.toFixed(1) }}</b>/s</span>
+          <span>out <b class="num">{{ q.deliverRate.toFixed(1) }}</b>/s</span>
+          <span>ack <b class="num">{{ q.ackRate.toFixed(1) }}</b>/s</span>
+        </div>
+      </div>
+    } @empty {
+      <div class="card empty" style="grid-column: 1 / -1">No queue data yet.</div>
+    }
+  </div>
+
+  <div class="card mt">
+    <div class="card-head"><div><h3>All queues</h3><span class="sub">Counters since the queue was created</span></div></div>
+    <div class="table-wrap">
+      <table class="t">
+        <thead>
+          <tr><th>Queue</th><th>Role</th><th class="r">Ready</th><th class="r">Unacked</th><th class="r">Total</th><th class="r">Consumers</th>
+            <th class="r">Publish/s</th><th class="r">Deliver/s</th><th class="r">Ack/s</th><th class="r">Published</th><th class="r">Acked</th><th class="r">Redelivered</th></tr>
+        </thead>
+        <tbody>
+          @for (q of queues(); track q.name) {
+            <tr [class.dlq]="q.role === 'dead-letter' && q.total > 0">
+              <td class="mono"><b>{{ q.name }}</b></td>
+              <td><span class="chip" [class]="roleChip(q)">{{ q.role }}</span></td>
+              <td class="r num">{{ q.ready }}</td><td class="r num">{{ q.unacked }}</td><td class="r num"><b>{{ q.total }}</b></td>
+              <td class="r num">{{ q.consumers }}</td>
+              <td class="r num">{{ q.publishRate.toFixed(1) }}</td><td class="r num">{{ q.deliverRate.toFixed(1) }}</td><td class="r num">{{ q.ackRate.toFixed(1) }}</td>
+              <td class="r num">{{ compact(q.published) }}</td><td class="r num">{{ compact(q.acked) }}</td><td class="r num">{{ q.redelivered }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="page-head mt" style="margin-bottom: 12px">
+    <div><h2>Workers</h2><p>Competing consumers. Start more processes to scale out; they appear here automatically.</p></div>
+    <label class="toggle"><input type="checkbox" [checked]="showOffline()" (change)="showOffline.set($any($event.target).checked)" /> Show offline workers</label>
+  </div>
+
+  @if (snap(); as s) {
+    <div class="grid cols-2">
+      @for (g of [s.ocrWorkers, s.businessWorkers]; track g.kind) {
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h3>{{ g.kind === 'ocr' ? 'OCR workers (Python)' : 'Business workers (.NET)' }}</h3>
+              <span class="sub">consuming {{ g.kind === 'ocr' ? 'ocr-jobs' : 'ocr-results' }}</span>
+            </div>
+            <div class="count"><b class="num">{{ g.onlineCount }}</b><span>online</span></div>
+          </div>
+          <div class="workers">
+            @for (w of visible(g); track w.id) {
+              <div class="w" [class.offline]="!w.online">
+                <div class="wh">
+                  <span class="dot" [class]="w.online ? (w.busy ? 'busy' : 'ok') : 'off'"></span>
+                  <b class="mono">{{ pid(w.id) }}</b>
+                  <span class="muted host">{{ host(w.id) }}</span>
+                  <span class="chip" [class]="w.online ? (w.busy ? 'info' : 'ok') : 'slate'" style="margin-left:auto">
+                    {{ w.online ? (w.busy ? 'Processing' : 'Idle') : 'Offline' }}
+                  </span>
+                </div>
+                <div class="wb">
+                  <div><small>Processed</small><b class="num">{{ w.processed }}</b></div>
+                  <div><small>Share</small><b class="num">{{ pct(w.processed, total(g), 0) }}</b></div>
+                  <div><small>Prefetch</small><b class="num">{{ w.online ? w.prefetch : '—' }}</b></div>
+                  <div><small>Last job</small><b>{{ ago(w.lastActivity) }}</b></div>
+                </div>
+                <app-seg-bar [segments]="[{ value: w.processed, color: g.kind === 'ocr' ? '#2f6fed' : '#7c5cdb', label: 'Processed' }]" [total]="total(g)" size="sm" />
+              </div>
+            } @empty {
+              <div class="empty">No workers online. Start one with <span class="mono">scripts/start-workers.ps1</span>.</div>
+            }
+          </div>
+        </div>
+      }
+    </div>
+  }
+</div>

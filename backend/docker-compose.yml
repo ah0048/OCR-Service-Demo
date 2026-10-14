@@ -7,6 +7,8 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-ocr}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-ocr_dev_pw}
+      # refresh queue statistics every second (default 5s) so the dashboard feels live
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit collect_statistics_interval 1000"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:

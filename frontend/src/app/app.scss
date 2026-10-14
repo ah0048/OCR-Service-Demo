@@ -1,0 +1,6 @@
+.toasts { position: fixed; right: 20px; bottom: 20px; z-index: 200; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+.toast { background: var(--navy-800); color: #fff; padding: 12px 16px; border-radius: 12px; box-shadow: var(--shadow-lg); border-left: 4px solid var(--info);
+  max-width: 420px; animation: toastIn 0.35s var(--ease); }
+.toast.ok { border-left-color: #3ddc97; }
+.toast.bad { border-left-color: #ff6b78; }
+@keyframes toastIn { from { opacity: 0; transform: translateY(12px) scale(0.98); } }

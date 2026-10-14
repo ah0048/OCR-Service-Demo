@@ -56,10 +56,17 @@ Instance counts are not configured anywhere; start as many processes as you want
 | POST | `/api/jobs` | `{ "clientReference": "C1", "imageReference": "id-001.jpg" }` → `202` + `jobId` + `statusUrl` |
 | POST | `/api/jobs/batch` | `{ "count": 1000, "clientReferencePrefix": "LOAD" }` → `202` (max 10,000, config `Batch:MaxSize`) |
 | GET | `/api/jobs/{id}` | status, outcome, reason codes, OCR output, timestamps, `resultDeliveries` |
+| GET | `/api/jobs` | paged table: `?page=&pageSize=&status=&outcome=&batchId=&search=` |
 | GET | `/api/stats` | counts by status and outcome |
+| GET | `/api/dashboard/stream` | server-sent events: a full snapshot every second (totals, throughput, queues, workers, batches) |
+| GET | `/api/dashboard/snapshot` | the same snapshot, once |
 | GET | `/health` | API + DB health |
 
-Status: `Queued` → `Completed`. Outcome: `Succeeded`, `ValidationFailed`, `ManualReview`, `OcrFailed`, `TechnicalError` (reserved; see Limitations).
+Status: `Queued` → `OcrInProgress` (an OCR worker picked it up) → `Completed`. Outcome: `Succeeded`, `ValidationFailed`, `ManualReview`, `OcrFailed`, `TechnicalError` (reserved; see Limitations).
+
+## Dashboard
+The Angular dashboard in `../frontend` reads the stream above. Queue and worker data come from the RabbitMQ management HTTP API (`RabbitMq:ManagementUrl`, default `http://localhost:15672`, same credentials), proxied by the API so the browser never talks to RabbitMQ. CORS allows `http://localhost:4200` (`Cors:Origins`).
+A third queue, `job-events`, carries best-effort "OCR started" events from the Python workers; the business worker consumes it and moves the job to `OcrInProgress`. Losing one is harmless.
 
 ## Load test / scaling demo
 ```powershell

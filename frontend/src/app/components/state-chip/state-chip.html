@@ -1,0 +1,7 @@
+@if (status() === 'Completed' && outcome()) {
+  <span class="chip" [class]="chipClass()">{{ label() }}</span>
+} @else if (status() === 'OcrInProgress') {
+  <span class="chip info pulse">OCR processing</span>
+} @else {
+  <span class="chip slate pulse">Queued</span>
+}

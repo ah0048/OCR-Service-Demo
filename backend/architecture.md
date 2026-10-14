@@ -44,3 +44,9 @@ Business rejections are final results (acked), not errors.
 
 ## Scaling
 Competing consumers: run more OCR or business worker processes against the same queues; `prefetch=1` gives fair dispatch. Throughput ≈ workers ÷ delay (3 workers × 2 s ≈ 1.5 jobs/s measured 1.4). Instance counts are not configured in code.
+
+## Dashboard support (added with the frontend)
+- `job-events` queue (same declaration as the others, with DLQ): Python publishes `{ jobId, workerId, startedAt }` when it starts a job. `ProgressConsumer` (in the business worker) runs `UPDATE ... WHERE Status = 'Queued'` to set `OcrInProgress`, so late or duplicate events cannot move a job backwards.
+- `jobs` gained `BatchId`, `BatchName`, `OcrWorkerId`, `BusinessWorkerId` (migration `AddBatchAndWorkerTracking`). The result message carries `workerId`.
+- `DashboardService` builds a snapshot per second from PostgreSQL aggregates plus the RabbitMQ management API (`/api/queues`, `/api/channels`, `/api/consumers`, `/api/connections`; connections are mapped back to the names workers register, e.g. `ocr-HOST-1234`). Queue rates are computed from counter deltas over 10 s because the management plugin publishes counters in bursts.
+- Worker lists merge live consumers with workers seen in the DB, so stopped workers show as offline with their processed counts.

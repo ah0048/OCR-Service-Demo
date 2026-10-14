@@ -17,9 +17,12 @@ See README.md. Dev API port comes from `OcrDemo.Api/Properties/launchSettings.js
 - Rebuilding while workers run fails (DLL locks); stop them first.
 - In this environment, long bash heredocs failed once; use the Write tool for files, and PowerShell `Start-Process` for detached processes.
 
+## Frontend (Angular 22, `../frontend`)
+Layout: `core/` (services, models), `components/<name>/` and `pages/<name>/`, each with .ts/.html/.scss. Pages: Overview, Queues & workers, Jobs (live table), Batches, plus a job drawer and a submit dialog. Data: one SSE stream (`DashboardStore`) plus REST for the jobs table/drawer. Brand images are in `frontend/public` (cover banner, EGX logo, emblem; `unnamed.png` is the reference screenshot). API URL constant: `frontend/src/app/api.ts`. Run: `cd frontend; npm install; npm start` -> http://localhost:4200.
+
 ## Not done / outstanding
 - No automated tests (integration tests were not built, to keep it simple); verification was manual.
 - Not verified: DB-outage recovery and DLQ via dashboard (described in README, behavior follows from the code).
 - No attempt limit on requeue; `TechnicalError` outcome is never persisted; no outbox (documented limitations).
 - Containerizing the apps (Dockerfiles) is only described in the README.
-- Frontend not started.
+- Dashboard has no automated tests; verified with headless Edge screenshots. Latency stats use the last 5 minutes of completions. Chart history starts empty on page load (client-side).

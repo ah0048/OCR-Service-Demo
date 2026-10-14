@@ -1,0 +1,29 @@
+<div class="wrap">
+  <div class="legend">
+    @for (s of series(); track s.key) {
+      <span class="lg"><i [style.background]="s.color"></i>{{ s.label }}
+        <b class="num">{{ latest(s.key) }}</b></span>
+    }
+  </div>
+  <svg [attr.viewBox]="'0 0 ' + W + ' ' + H" preserveAspectRatio="none" class="chart"
+       (mousemove)="move($event)" (mouseleave)="hover.set(null)">
+    @for (g of grid(); track g.y) {
+      <line [attr.x1]="padL" [attr.x2]="W" [attr.y1]="g.y" [attr.y2]="g.y" stroke="#e8ecf4" stroke-width="1" />
+      <text [attr.x]="padL - 8" [attr.y]="g.y + 4" text-anchor="end" class="axis">{{ g.label }}</text>
+    }
+    @for (p of paths(); track p.key) {
+      @if (p.area) { <path [attr.d]="p.areaD" [attr.fill]="p.color" opacity="0.12" /> }
+      <path [attr.d]="p.d" fill="none" [attr.stroke]="p.color" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
+    }
+    @if (hoverX(); as hx) {
+      <line [attr.x1]="hx" [attr.x2]="hx" [attr.y1]="padT" [attr.y2]="H - padB" stroke="#94a0b8" stroke-dasharray="3 3" />
+    }
+  </svg>
+  @if (tip(); as t) {
+    <div class="tip" [style.left.%]="t.leftPct">
+      <div class="tt">{{ t.time }}</div>
+      @for (r of t.rows; track r.label) { <div><i [style.background]="r.color"></i>{{ r.label }} <b class="num">{{ r.value }}</b></div> }
+    </div>
+  }
+  <div class="foot"><span>{{ spanLabel() }}</span><span>now</span></div>
+</div>

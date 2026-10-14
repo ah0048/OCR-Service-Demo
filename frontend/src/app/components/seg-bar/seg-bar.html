@@ -1,0 +1,5 @@
+<div class="bar" [class.lg]="size() === 'lg'" [class.sm]="size() === 'sm'">
+  @for (s of segs(); track $index) {
+    <i [class.stripes]="s.striped" [style.width.%]="s.pct" [style.background]="s.color" [title]="s.label + ': ' + s.value"></i>
+  }
+</div>

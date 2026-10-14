@@ -1,0 +1,111 @@
+@if (store.selectedJobId(); as id) {
+  <div class="backdrop" (click)="close()"></div>
+  <aside class="drawer" role="dialog" aria-label="Job details">
+    <header>
+      <div>
+        <small class="muted">JOB</small>
+        <h3 class="mono idrow">{{ id }}
+          <button class="btn sm ghost" (click)="copy(id)">Copy</button></h3>
+      </div>
+      <button class="x" (click)="close()" aria-label="Close">✕</button>
+    </header>
+
+    @if (job(); as j) {
+      <div class="body">
+        <div class="topline">
+          <app-state-chip [status]="j.status" [outcome]="j.outcome" />
+          <span class="muted">{{ j.clientReference }}</span>
+          @if (j.batchName) { <button class="chip slate lnk" (click)="openBatch(j.batchId)">batch {{ j.batchName }} #{{ short(j.batchId) }}</button> }
+        </div>
+
+        <!-- stepper -->
+        <div class="steps">
+          @for (s of steps(); track s.label; let i = $index) {
+            <div class="step" [class.done]="s.state === 'done'" [class.active]="s.state === 'active'">
+              <div class="bubble">@if (s.state === 'done') { ✓ } @else { {{ i + 1 }} }</div>
+              <div class="lbl">{{ s.label }}</div>
+              <div class="sub">{{ s.sub }}</div>
+            </div>
+          }
+        </div>
+
+        <!-- progress -->
+        <div class="prog">
+          <div class="bar lg">
+            <i [class.stripes]="j.status !== 'Completed'" [style.width.%]="progress()" [style.background]="progressColor()"></i>
+          </div>
+          <div class="pl"><span>{{ progressLabel() }}</span><b class="num">{{ progress().toFixed(0) }}%</b></div>
+        </div>
+
+        @if (j.status === 'Completed') {
+          <section>
+            <h4>Where the time went</h4>
+            <app-seg-bar [segments]="timeSegs()" size="lg" />
+            <div class="tlegend">
+              @for (t of timeSegs(); track t.label) {
+                <div><i [style.background]="t.color"></i>{{ t.label }}<b class="num">{{ dur(t.value) }}</b></div>
+              }
+              <div class="totalt">Total<b class="num">{{ dur(totalMs()) }}</b></div>
+            </div>
+          </section>
+
+          <section>
+            <h4>Business result</h4>
+            <div class="res">
+              <app-state-chip [status]="j.status" [outcome]="j.outcome" />
+              @for (r of j.reasonCodes; track r) {
+                <div class="reason"><span class="chip slate mono">{{ r }}</span><span>{{ reasonText(r) }}</span></div>
+              } @empty { <span class="muted">All validation rules passed.</span> }
+            </div>
+            @if (j.ocr) {
+              <div class="confrow">
+                <span class="muted">OCR confidence</span>
+                <div class="conf"><i [style.width.%]="j.ocr.confidence * 100" [style.background]="j.ocr.confidence >= 0.8 ? '#1f9d6b' : '#e39a1b'"></i><em></em></div>
+                <b class="num">{{ (j.ocr.confidence * 100).toFixed(1) }}%</b>
+              </div>
+              <small class="muted">The marker is the 80% manual-review threshold.</small>
+            }
+          </section>
+
+          @if (j.ocr?.fields; as f) {
+            <section>
+              <h4>Extracted fields <span class="chip violet">mock data</span></h4>
+              <div class="fields">
+                @for (k of keys(f); track k) { <div><small>{{ k }}</small><span class="mono">{{ f[k] }}</span></div> }
+              </div>
+            </section>
+          }
+        } @else {
+          <section>
+            <h4>What is happening</h4>
+            <p class="muted note">{{ liveNote() }}</p>
+          </section>
+        }
+
+        <section>
+          <h4>Details</h4>
+          <dl>
+            <dt>Image reference</dt><dd class="mono">{{ j.imageReference }}</dd>
+            <dt>Correlation id</dt><dd class="mono">{{ j.correlationId }}</dd>
+            <dt>Created</dt><dd>{{ time(j.createdAt) }}</dd>
+            <dt>OCR started</dt><dd>{{ time(j.startedAt) }}</dd>
+            <dt>Completed</dt><dd>{{ time(j.completedAt) }}</dd>
+            <dt>OCR worker</dt><dd>{{ j.ocrWorkerId ? pid(j.ocrWorkerId) + ' · ' + host(j.ocrWorkerId) : '—' }}</dd>
+            <dt>Business worker</dt><dd>{{ j.businessWorkerId ? pid(j.businessWorkerId) + ' · ' + host(j.businessWorkerId) : '—' }}</dd>
+            <dt>Model</dt><dd>{{ j.ocr?.modelVersion ?? '—' }}</dd>
+            <dt>Result deliveries</dt>
+            <dd>{{ j.resultDeliveries }} @if (j.resultDeliveries > 1) { <span class="chip warn">duplicate delivery ignored</span> }</dd>
+          </dl>
+          <details>
+            <summary>Raw JSON</summary>
+            <pre class="mono">{{ raw() }}</pre>
+          </details>
+        </section>
+      </div>
+    } @else if (missing()) {
+      <div class="body"><div class="empty">Job not found.</div></div>
+    } @else {
+      <div class="body"><div class="empty">Loading…</div></div>
+    }
+  </aside>
+}

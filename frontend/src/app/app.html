@@ -1,0 +1,10 @@
+<app-navbar />
+<main><router-outlet /></main>
+<app-job-drawer />
+<app-submit-dialog />
+
+<div class="toasts">
+  @for (t of store.toasts(); track t.id) {
+    <div class="toast" [class]="t.kind">{{ t.text }}</div>
+  }
+</div>

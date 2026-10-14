@@ -98,6 +98,8 @@ public sealed class ResultConsumer(IServiceScopeFactory scopes, IConfiguration c
         job.OcrDurationMs = msg.ProcessingMs;
         job.ModelVersion = msg.ModelVersion;
         job.StartedAt = msg.StartedAt.UtcDateTime;
+        job.OcrWorkerId = msg.WorkerId;
+        job.BusinessWorkerId = _workerId;
         job.Outcome = outcome;
         job.ReasonCodes = reasons;
         job.Status = JobStatus.Completed;

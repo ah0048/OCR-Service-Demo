@@ -7,11 +7,18 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOcrDb(builder.Configuration);
 builder.Services.AddSingleton<JobPublisher>();
+builder.Services.AddHttpClient<RabbitManagement>((sp, c) => RabbitManagement.Configure(c, sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<DashboardService>();
+builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
+    .WithOrigins(builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? ["http://localhost:4200"])
+    .AllowAnyHeader().AllowAnyMethod()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHealthChecks().AddDbContextCheck<OcrDbContext>();
 
 var app = builder.Build();
+
+app.UseCors();
 
 if (app.Environment.IsDevelopment())
 {
@@ -26,9 +33,12 @@ if (builder.Configuration.GetValue<bool>("Database:AutoMigrate"))
 }
 
 app.MapHealthChecks("/health");
+app.MapDashboard();
 
-static Job NewJob(string clientReference, string imageReference) => new()
+static Job NewJob(string clientReference, string imageReference, Guid? batchId = null, string? batchName = null) => new()
 {
+    BatchId = batchId,
+    BatchName = batchName,
     Id = Guid.NewGuid(),
     CorrelationId = Guid.NewGuid(),
     ClientReference = clientReference,
@@ -73,16 +83,17 @@ app.MapPost("/api/jobs/batch", async (BatchRequest req, OcrDbContext db, JobPubl
     if (req.Count < 1 || req.Count > max)
         return Results.ValidationProblem(new Dictionary<string, string[]> { ["count"] = [$"count must be between 1 and {max}"] });
     var prefix = string.IsNullOrWhiteSpace(req.ClientReferencePrefix) ? "LOAD" : req.ClientReferencePrefix;
-    var jobs = Enumerable.Range(1, req.Count).Select(i => NewJob($"{prefix}-{i}", $"mock-id-{Guid.NewGuid():N}.jpg")).ToList();
+    var batchId = Guid.NewGuid();
+    var jobs = Enumerable.Range(1, req.Count).Select(i => NewJob($"{prefix}-{i}", $"mock-id-{Guid.NewGuid():N}.jpg", batchId, prefix)).ToList();
     return await Submit(jobs, db, publisher, ct,
-        () => Results.Accepted("/api/stats", new { count = jobs.Count, statsUrl = "/api/stats", jobIds = jobs.Select(j => j.Id) }));
+        () => Results.Accepted("/api/dashboard/snapshot", new { batchId, count = jobs.Count, firstJobId = jobs[0].Id }));
 });
 
 app.MapGet("/api/jobs/{id:guid}", async (Guid id, OcrDbContext db, CancellationToken ct) =>
     await db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == id, ct) is { } j
         ? Results.Ok(new
         {
-            jobId = j.Id, j.CorrelationId, j.ClientReference, j.ImageReference,
+            jobId = j.Id, j.CorrelationId, j.BatchId, j.BatchName, j.OcrWorkerId, j.BusinessWorkerId, j.ClientReference, j.ImageReference,
             status = j.Status.ToString(), outcome = j.Outcome?.ToString(), j.ReasonCodes,
             ocr = j.OcrOutcome is null ? null : new { outcome = j.OcrOutcome, j.Confidence, durationMs = j.OcrDurationMs, j.ModelVersion, fields = j.ExtractedFields },
             j.CreatedAt, j.StartedAt, j.CompletedAt, j.ResultDeliveries,

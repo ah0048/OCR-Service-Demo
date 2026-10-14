@@ -1,0 +1,49 @@
+@if (store.submitOpen()) {
+  <div class="backdrop" (click)="close()"></div>
+  <div class="modal" role="dialog" aria-label="Submit jobs">
+    <header>
+      <h3>Submit jobs</h3>
+      <button class="x" (click)="close()" aria-label="Close">✕</button>
+    </header>
+
+    <div class="tabs">
+      <button [class.on]="mode() === 'single'" (click)="mode.set('single')">Single job</button>
+      <button [class.on]="mode() === 'batch'" (click)="mode.set('batch')">Batch</button>
+    </div>
+
+    @if (mode() === 'single') {
+      <div class="form">
+        <div class="field"><label>Client reference</label>
+          <input class="input" [value]="clientRef()" (input)="clientRef.set($any($event.target).value)" /></div>
+        <div class="field"><label>Image reference</label>
+          <input class="input" [value]="imageRef()" (input)="imageRef.set($any($event.target).value)" /></div>
+        <p class="hint">No image is uploaded: this is a mock reference. The job is saved, queued, and you can follow it live.</p>
+        <button class="btn primary" [disabled]="busy() || !clientRef().trim() || !imageRef().trim()" (click)="sendSingle()">
+          {{ busy() ? 'Submitting…' : 'Submit job' }}
+        </button>
+      </div>
+    } @else {
+      <div class="form">
+        <div class="field"><label>Number of jobs</label>
+          <input class="input" type="number" min="1" max="10000" [value]="count()" (input)="count.set(+$any($event.target).value)" /></div>
+        <div class="presets">
+          @for (n of [10, 100, 500, 1000, 5000]; track n) {
+            <button class="chip" [class]="count() === n ? 'info' : 'slate'" (click)="count.set(n)">{{ n.toLocaleString() }}</button>
+          }
+        </div>
+        <div class="field"><label>Batch name (client reference prefix)</label>
+          <input class="input" [value]="prefix()" (input)="prefix.set($any($event.target).value)" /></div>
+        <p class="hint">The API answers with <b>202 Accepted</b> immediately; OCR happens afterwards. Watch the progress bars on the Batches page.</p>
+        <button class="btn primary" [disabled]="busy() || count() < 1 || count() > 10000" (click)="sendBatch()">
+          {{ busy() ? 'Submitting…' : 'Submit ' + count().toLocaleString() + ' jobs' }}
+        </button>
+      </div>
+    }
+
+    @if (result(); as r) {
+      <div class="result" [class.bad]="r.bad">
+        <b>{{ r.title }}</b><span>{{ r.text }}</span>
+      </div>
+    }
+  </div>
+}

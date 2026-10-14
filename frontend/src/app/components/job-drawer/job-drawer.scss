@@ -1,0 +1,50 @@
+.backdrop { position: fixed; inset: 0; background: rgba(10, 21, 48, 0.45); backdrop-filter: blur(2px); z-index: 90; animation: fade 0.2s; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); background: #fff; z-index: 100; box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column; animation: slide 0.35s var(--ease); }
+@keyframes slide { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes fade { from { opacity: 0; } }
+header { display: flex; justify-content: space-between; align-items: flex-start; padding: 18px 22px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #f7f9fd, #fff); }
+.idrow { font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; word-break: break-all; font-weight: 600; }
+.x { border: 0; background: transparent; font-size: 18px; cursor: pointer; width: 34px; height: 34px; border-radius: 50%; color: var(--muted); }
+.x:hover { background: var(--slate-bg); color: var(--text); }
+.body { padding: 20px 22px 40px; overflow-y: auto; display: flex; flex-direction: column; gap: 22px; }
+.topline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lnk { border: 0; cursor: pointer; }
+section h4 { margin-bottom: 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); display: flex; gap: 10px; align-items: center; }
+
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); position: relative; }
+.step { text-align: center; position: relative; padding: 0 4px; }
+.step::before { content: ''; position: absolute; top: 15px; left: -50%; right: 50%; height: 3px; background: #e1e6f0; z-index: 0; transition: background 0.5s; }
+.step:first-child::before { display: none; }
+.step.done::before, .step.active::before { background: var(--ok); }
+.bubble { width: 32px; height: 32px; border-radius: 50%; margin: 0 auto 8px; display: grid; place-items: center; font-weight: 700; background: #e9edf5; color: var(--muted);
+  position: relative; z-index: 1; transition: all 0.4s var(--ease); }
+.step.done .bubble { background: var(--ok); color: #fff; }
+.step.active .bubble { background: var(--info); color: #fff; box-shadow: 0 0 0 6px rgba(47, 111, 237, 0.2); animation: ring 1.4s infinite; }
+@keyframes ring { 50% { box-shadow: 0 0 0 10px rgba(47, 111, 237, 0.06); } }
+.lbl { font-weight: 600; font-size: 12.5px; }
+.sub { color: var(--muted); font-size: 11.5px; min-height: 16px; }
+
+.prog .pl { display: flex; justify-content: space-between; margin-top: 6px; color: var(--muted); font-size: 12.5px; }
+.prog .pl b { color: var(--text); }
+.tlegend { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+.tlegend div { display: flex; align-items: center; gap: 6px; }
+.tlegend i { width: 10px; height: 10px; border-radius: 3px; }
+.tlegend b { color: var(--text); }
+.totalt { margin-left: auto; }
+.res { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.reason { display: flex; gap: 10px; align-items: center; font-size: 13px; }
+.confrow { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+.conf { flex: 1; height: 10px; background: #e9edf5; border-radius: 10px; position: relative; overflow: visible; }
+.conf i { display: block; height: 100%; border-radius: 10px; transition: width 0.5s; }
+.conf em { position: absolute; left: 80%; top: -4px; width: 2px; height: 18px; background: var(--navy-700); }
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fields div { background: #f7f9fd; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; display: flex; flex-direction: column; }
+.fields small { color: var(--muted); text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.05em; }
+.note { margin: 0; font-size: 13.5px; }
+dl { display: grid; grid-template-columns: 150px 1fr; gap: 9px 12px; margin: 0; font-size: 13px; }
+dt { color: var(--muted); }
+dd { margin: 0; word-break: break-all; }
+details { margin-top: 14px; }
+summary { cursor: pointer; color: var(--muted); }
+pre { background: #0d1b3e; color: #cfe0ff; padding: 14px; border-radius: 10px; overflow: auto; max-height: 260px; }

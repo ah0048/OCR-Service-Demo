@@ -22,6 +22,7 @@ RABBIT_USER = os.getenv("RABBITMQ_USER", "ocr")
 RABBIT_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "ocr_dev_pw")
 JOBS_QUEUE = "ocr-jobs"
 RESULTS_QUEUE = "ocr-results"
+EVENTS_QUEUE = "job-events"
 WORKER_ID = f"ocr-{socket.gethostname()}-{os.getpid()}"
 
 
@@ -62,6 +63,17 @@ def connect():
     return pika.BlockingConnection(params)
 
 
+def publish_started(channel, job_id, started_at):
+    """Best-effort 'OCR started' event for the dashboard; never fails the job."""
+    try:
+        channel.basic_publish(
+            exchange="", routing_key=EVENTS_QUEUE,
+            body=json.dumps({"jobId": job_id, "workerId": WORKER_ID, "startedAt": started_at.isoformat()}),
+            properties=pika.BasicProperties(delivery_mode=pika.DeliveryMode.Persistent, content_type="application/json"))
+    except Exception:
+        log.warning("Could not publish job-started event", extra={"extra_fields": {"jobId": job_id}})
+
+
 def process(channel, method, properties, body):
     started_at = datetime.now(timezone.utc)
     try:
@@ -73,6 +85,7 @@ def process(channel, method, properties, body):
         return
 
     info("Processing job", jobId=job_id, correlationId=job.get("correlationId"))
+    publish_started(channel, job_id, started_at)
     t0 = time.perf_counter()
     try:
         out = run_ocr(job)
@@ -85,6 +98,7 @@ def process(channel, method, properties, body):
             "processingMs": int((time.perf_counter() - t0) * 1000),
             "startedAt": started_at.isoformat(),
             "modelVersion": MODEL_VERSION,
+            "workerId": WORKER_ID,
         }
         channel.basic_publish(
             exchange="", routing_key=RESULTS_QUEUE, body=json.dumps(result),
@@ -122,6 +136,7 @@ def main():
             channel.confirm_delivery()
             declare_queue(channel, JOBS_QUEUE)
             declare_queue(channel, RESULTS_QUEUE)
+            declare_queue(channel, EVENTS_QUEUE)
             channel.basic_qos(prefetch_count=1)  # fair dispatch
             info("Connected, waiting for jobs", queue=JOBS_QUEUE)
             for method, props, body in channel.consume(JOBS_QUEUE, auto_ack=False, inactivity_timeout=1):

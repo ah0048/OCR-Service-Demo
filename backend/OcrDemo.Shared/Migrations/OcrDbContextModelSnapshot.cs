@@ -29,6 +29,15 @@ namespace OcrDemo.Shared.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BatchName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BusinessWorkerId")
+                        .HasColumnType("text");
+
                     b.Property<string>("ClientReference")
                         .IsRequired()
                         .HasColumnType("text");
@@ -61,6 +70,9 @@ namespace OcrDemo.Shared.Migrations
                     b.Property<string>("OcrOutcome")
                         .HasColumnType("text");
 
+                    b.Property<string>("OcrWorkerId")
+                        .HasColumnType("text");
+
                     b.Property<string>("Outcome")
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
@@ -81,6 +93,10 @@ namespace OcrDemo.Shared.Migrations
                         .HasColumnType("character varying(32)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BatchId");
+
+                    b.HasIndex("CreatedAt");
 
                     b.HasIndex("Status");
 
