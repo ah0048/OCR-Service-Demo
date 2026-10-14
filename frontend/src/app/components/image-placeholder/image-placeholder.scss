@@ -25,3 +25,13 @@ img { width: 100%; height: 100%; object-fit: cover; display: block; }
   color: var(--faint);
   font-weight: 600;
 }
+
+.side {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--navy-700);
+}

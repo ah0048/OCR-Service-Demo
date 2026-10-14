@@ -1,8 +1,8 @@
 <div class="page">
   <div class="page-head">
     <div>
-      <h1>OCR results</h1>
-      <p>Every finished job appears here the moment it completes: the scanned image on the left, the OCR output on the right. No refresh needed.</p>
+      <h1>OCR results <span class="audience">technical view</span></h1>
+      <p>Every finished job appears here the moment it completes: the front and back of the card on the left, the OCR output on the right. No refresh needed.</p>
     </div>
     <div class="ctl">
       <span class="chip" [class]="paused() ? 'slate' : results.connected() ? 'ok pulse' : 'bad'">
@@ -32,7 +32,10 @@
         <div class="clip">
       <article class="row card">
         <div class="img">
-          <app-image-placeholder [accent]="color[r.outcome]" [alt]="r.imageReference" />
+          <div class="pair">
+            <app-image-placeholder side="front" [accent]="color[r.outcome]" [alt]="r.imageReference" />
+            <app-image-placeholder side="back" [accent]="color[r.outcome]" [alt]="r.imageReference" />
+          </div>
           <div class="imgname mono" [title]="r.imageReference">{{ r.imageReference }}</div>
         </div>
 

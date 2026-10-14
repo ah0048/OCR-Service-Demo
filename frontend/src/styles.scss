@@ -158,3 +158,32 @@ table.t { width: 100%; border-collapse: collapse; background: #fff; }
 
 ::-webkit-scrollbar { height: 0.625rem; width: 0.625rem; }
 ::-webkit-scrollbar-thumb { background: #cdd5e4; border-radius: 0.625rem; }
+
+/* ---------- live result feeds (shared by the technical and business result pages) ---------- */
+.newbar {
+  display: block; width: 100%; margin-bottom: 0.875rem; border: 1px dashed var(--gold); background: var(--gold-soft); color: #7a5604;
+  border-radius: 0.75rem; padding: 0.625rem; font-weight: 650; cursor: pointer;
+}
+.newbar:hover { filter: brightness(0.97); }
+
+.rows { display: flex; flex-direction: column; }
+
+// Each card sits in a "slot". A new slot opens from zero height to full height (pushing the older cards down
+// smoothly) while the card itself slides in from the left. The 0.875rem spacing lives inside the slot so it animates too.
+.slot { display: grid; grid-template-rows: 1fr; }
+.clip { min-height: 0; padding-bottom: 0.875rem; }
+.slot.fresh { animation: slot-open 0.65s var(--ease); }
+.slot.fresh .clip { overflow: hidden; }
+.slot.fresh .row { animation: slide-in 0.8s var(--ease); }
+
+@keyframes slot-open { from { grid-template-rows: 0fr; } to { grid-template-rows: 1fr; } }
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(-5.625rem); box-shadow: 0 0 0 0.1875rem rgba(225, 168, 45, 0.6); }
+  55%  { opacity: 1; }
+  to   { transform: none; }
+}
+
+.audience { font-size: 0.8125rem; font-weight: 650; color: var(--muted); margin-left: 0.6rem; text-transform: uppercase; letter-spacing: 0.08em; }
+
+/* block (not the default inline) so the sticky navbar has the full page height to stick within */
+app-root { display: block; }

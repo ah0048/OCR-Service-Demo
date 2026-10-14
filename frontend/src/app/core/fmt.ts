@@ -60,3 +60,21 @@ export function between(a: string | null | undefined, b: string | null | undefin
 export function utc(iso: string): string {
   return /[zZ]|[+-]\d\d:\d\d$/.test(iso) ? iso : iso + 'Z';
 }
+
+/** "1990-10-06" -> "6 October 1990" (parsed by hand so the timezone can never shift the day). */
+export function formatDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+/** 14-digit national id grouped by meaning: century, birth date, governorate, serial, check digit. */
+export function formatNationalId(id: string): string {
+  return /^\d{14}$/.test(id) ? `${id[0]} ${id.slice(1, 7)} ${id.slice(7, 9)} ${id.slice(9, 13)} ${id[13]}` : id;
+}
+
+/** "someFieldName" -> "Some field name" (for fields the page has no dedicated label for). */
+export function humanize(key: string): string {
+  const spaced = key.replace(/([A-Z])/g, ' $1').toLowerCase().trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}

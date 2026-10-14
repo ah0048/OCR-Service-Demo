@@ -13,7 +13,8 @@ The API is expected at `http://localhost:5125` (change `API_URL` in `src/app/api
 
 ## Pages
 - **Overview**: KPIs, animated pipeline (API → ocr-jobs → OCR workers → ocr-results → business workers → PostgreSQL), throughput and backlog charts, batch progress, outcomes, latest jobs.
-- **Results**: a live feed of finished jobs, one row each: image placeholder, job id / image reference, outcome, confidence, and the OCR output as JSON. New rows are pushed in as each job completes (Pause freezes the list; filter by outcome). The placeholder is `components/image-placeholder`; pass it a `src` when real images exist.
+- **Tech view** (`/results`): a live feed of finished jobs, one row each: front and back image placeholders, job id / image reference, outcome, confidence, and the OCR output as JSON. New rows are pushed in as each job completes (Pause freezes the list; filter by outcome). The placeholder is `components/image-placeholder` (`side="front"` or `"back"`); pass it a `src` per side when real images exist.
+- **Business view** (`/business`): the same live feed for the business team. Per ID it shows only the job id, confidence, OCR time, and the extracted fields as large labelled lines (national ID grouped, dates written out), next to the front and back placeholders. No JSON, image reference, client reference or technical details. An ID the OCR could not read says so instead of showing fields.
 - **Queues & workers**: every RabbitMQ queue (ready / unacked / rates / dead letters) and every worker (online, busy, processed, share).
 - **Jobs**: the `jobs` table with search, state/outcome filters, paging. Click a row for the job drawer (stepper, progress, timing breakdown, reason codes, mock extracted fields).
 - **Batches**: segmented progress bars with speed and ETA.
@@ -26,6 +27,7 @@ Build: `npm run build` (output in `dist/`).
 ```
 src/app/
   core/         api.ts (HTTP client), dashboard-store.ts (SSE stream + histories), models.ts, fmt.ts
+                results-feed.ts (pause / show more / filter / new-row flags, shared by Tech view and Business view)
   components/   reusable pieces, one folder each: navbar, batch-card, jobs-table, job-drawer,
                 submit-dialog, state-chip, seg-bar, donut, line-chart
   pages/        routed pages, one folder each: overview, pipeline, jobs, batches
