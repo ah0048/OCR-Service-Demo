@@ -117,3 +117,22 @@ export const OUTCOME_LABEL: Record<string, string> = {
   OcrFailed: 'OCR failed',
   TechnicalError: 'Technical error',
 };
+
+/** A result as kept by the client: `live` is false for the initial backlog, `arrivedAt` is when it reached the browser. */
+export type LiveResult = ResultItem & { live: boolean; arrivedAt: number };
+
+/** One finished OCR result, pushed by /api/results/stream. */
+export interface ResultItem {
+  jobId: string;
+  clientReference: string;
+  imageReference: string;
+  batchName: string | null;
+  outcome: JobOutcome;
+  reasonCodes: string[];
+  ocr: { outcome: string; confidence: number; durationMs: number; modelVersion: string; fields: Record<string, string> | null };
+  ocrWorkerId: string | null;
+  businessWorkerId: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string;
+}

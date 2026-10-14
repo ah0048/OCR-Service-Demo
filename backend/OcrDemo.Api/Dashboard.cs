@@ -133,6 +133,61 @@ public static class DashboardEndpoints
 
         app.MapGet("/api/dashboard/snapshot", async (DashboardService svc, CancellationToken ct) => Results.Ok(await svc.BuildAsync(ct)));
 
+        // Pushes each job's OCR result the moment the job completes: first the latest `backlog` results
+        // (oldest first), then every new one. One SSE message per result.
+        app.MapGet("/api/results/stream", async (HttpContext ctx, IServiceScopeFactory scopes, ILogger<DashboardService> log, CancellationToken ct, int backlog = 30) =>
+        {
+            ctx.Response.Headers.ContentType = "text/event-stream";
+            ctx.Response.Headers.CacheControl = "no-cache";
+            backlog = Math.Clamp(backlog, 0, 200);
+
+            // Commits can land slightly out of timestamp order (several business workers), so each poll looks a few
+            // seconds behind the newest result seen and de-duplicates by job id instead of trusting the cursor alone.
+            var sent = new Dictionary<Guid, DateTime>();
+            var cursor = DateTime.UtcNow.AddMinutes(-1);
+            var first = true;
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    try
+                    {
+                        using var scope = scopes.CreateScope();
+                        var db = scope.ServiceProvider.GetRequiredService<OcrDbContext>();
+                        var q = db.Jobs.AsNoTracking().Where(j => j.Status == JobStatus.Completed && j.OcrOutcome != null);
+                        var rows = first
+                            ? (await q.OrderByDescending(j => j.CompletedAt).Take(backlog).ToListAsync(ct)).AsEnumerable().Reverse().ToList()
+                            : await q.Where(j => j.CompletedAt > cursor.AddSeconds(-5)).OrderBy(j => j.CompletedAt).Take(200).ToListAsync(ct);
+                        var eventName = first ? "event: backlog\n" : ""; // live results use the default "message" event
+                        first = false;
+
+                        foreach (var j in rows.Where(j => !sent.ContainsKey(j.Id)))
+                        {
+                            sent[j.Id] = j.CompletedAt!.Value;
+                            if (j.CompletedAt > cursor) cursor = j.CompletedAt.Value;
+                            var json = JsonSerializer.Serialize(new
+                            {
+                                jobId = j.Id, j.ClientReference, j.ImageReference, j.BatchName,
+                                outcome = j.Outcome?.ToString(), j.ReasonCodes,
+                                ocr = new { outcome = j.OcrOutcome, j.Confidence, durationMs = j.OcrDurationMs, j.ModelVersion, fields = j.ExtractedFields },
+                                j.OcrWorkerId, j.BusinessWorkerId, j.CreatedAt, j.StartedAt, j.CompletedAt,
+                            }, Json.Options);
+                            await ctx.Response.WriteAsync($"{eventName}data: {json}\n\n", ct);
+                        }
+                        foreach (var old in sent.Where(kv => kv.Value < cursor.AddSeconds(-30)).Select(kv => kv.Key).ToList()) sent.Remove(old);
+                        await ctx.Response.WriteAsync(": keep-alive\n\n", ct);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        log.LogError(ex, "Results stream poll failed");
+                    }
+                    await ctx.Response.Body.FlushAsync(ct);
+                    await Task.Delay(500, ct);
+                }
+            }
+            catch (OperationCanceledException) { /* client disconnected */ }
+        });
+
         // Paged, filterable jobs table.
         app.MapGet("/api/jobs", async (OcrDbContext db, CancellationToken ct,
             int page = 1, int pageSize = 25, string? status = null, string? outcome = null, Guid? batchId = null, string? search = null) =>

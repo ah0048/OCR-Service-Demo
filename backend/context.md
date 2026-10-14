@@ -20,6 +20,8 @@ See README.md. Dev API port comes from `OcrDemo.Api/Properties/launchSettings.js
 ## Frontend (Angular 22, `../frontend`)
 Layout: `core/` (services, models), `components/<name>/` and `pages/<name>/`, each with .ts/.html/.scss. Pages: Overview, Queues & workers, Jobs (live table), Batches, plus a job drawer and a submit dialog. Data: one SSE stream (`DashboardStore`) plus REST for the jobs table/drawer. Brand images are in `frontend/public` (cover banner, EGX logo, emblem; `unnamed.png` is the reference screenshot). API URL constant: `frontend/src/app/api.ts`. Run: `cd frontend; npm install; npm start` -> http://localhost:4200.
 
+Results page: `GET /api/results/stream` (SSE, polls the DB every 500 ms, re-checks the last 5 s and de-duplicates by job id because several business workers can commit out of timestamp order) feeds `core/results-store.ts`. Images are placeholders for now (`ImageReference` is just a string).
+
 ## Not done / outstanding
 - No automated tests (integration tests were not built, to keep it simple); verification was manual.
 - Not verified: DB-outage recovery and DLQ via dashboard (described in README, behavior follows from the code).

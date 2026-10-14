@@ -13,6 +13,7 @@ The API is expected at `http://localhost:5125` (change `API_URL` in `src/app/api
 
 ## Pages
 - **Overview**: KPIs, animated pipeline (API → ocr-jobs → OCR workers → ocr-results → business workers → PostgreSQL), throughput and backlog charts, batch progress, outcomes, latest jobs.
+- **Results**: a live feed of finished jobs, one row each: image placeholder, job id / image reference, outcome, confidence, and the OCR output as JSON. New rows are pushed in as each job completes (Pause freezes the list; filter by outcome). The placeholder is `components/image-placeholder`; pass it a `src` when real images exist.
 - **Queues & workers**: every RabbitMQ queue (ready / unacked / rates / dead letters) and every worker (online, busy, processed, share).
 - **Jobs**: the `jobs` table with search, state/outcome filters, paging. Click a row for the job drawer (stepper, progress, timing breakdown, reason codes, mock extracted fields).
 - **Batches**: segmented progress bars with speed and ETA.

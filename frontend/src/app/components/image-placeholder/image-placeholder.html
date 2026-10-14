@@ -1,0 +1,22 @@
+<div class="frame">
+  @if (src(); as url) {
+    <img [src]="url" [alt]="alt()" />
+  } @else {
+    <svg viewBox="0 0 160 101" class="card-art" role="img" [attr.aria-label]="alt() + ' (placeholder)'">
+      <rect x="1" y="1" width="158" height="99" rx="9" fill="#f7f9fd" stroke="#cdd6e8" stroke-width="1.5" />
+      <path d="M10 1h140a9 9 0 0 1 9 9v10H1V10a9 9 0 0 1 9-9z" [attr.fill]="accent()" opacity="0.9" />
+      <rect x="12" y="7" width="46" height="6" rx="3" fill="#ffffff" opacity="0.85" />
+      <!-- photo -->
+      <rect x="14" y="31" width="38" height="48" rx="5" fill="#e3e9f5" />
+      <circle cx="33" cy="48" r="8.5" fill="#b4c0da" />
+      <path d="M17 79c1-11 8-17 16-17s15 6 16 17z" fill="#b4c0da" />
+      <!-- text lines -->
+      <rect x="64" y="33" width="52" height="6" rx="3" fill="#c7d1e6" />
+      <rect x="64" y="46" width="78" height="5" rx="2.5" fill="#dbe2f0" />
+      <rect x="64" y="57" width="66" height="5" rx="2.5" fill="#dbe2f0" />
+      <rect x="64" y="68" width="40" height="5" rx="2.5" fill="#dbe2f0" />
+      <rect x="64" y="82" width="86" height="8" rx="2" fill="#e8edf7" />
+    </svg>
+    <span class="tag">placeholder</span>
+  }
+</div>

@@ -1,0 +1,88 @@
+<div class="page">
+  <div class="page-head">
+    <div>
+      <h1>OCR results</h1>
+      <p>Every finished job appears here the moment it completes: the scanned image on the left, the OCR output on the right. No refresh needed.</p>
+    </div>
+    <div class="ctl">
+      <span class="chip" [class]="paused() ? 'slate' : results.connected() ? 'ok pulse' : 'bad'">
+        {{ paused() ? 'Paused' : results.connected() ? 'Receiving live' : 'Reconnecting' }}
+      </span>
+      <span class="muted num">{{ results.received() }} received</span>
+      <button class="btn sm" (click)="togglePause()">{{ paused() ? 'Resume' : 'Pause' }}</button>
+    </div>
+  </div>
+
+  <div class="filters">
+    <button class="pill" [class.on]="!outcomeFilter()" (click)="outcomeFilter.set('')">All <b class="num">{{ results.results().length }}</b></button>
+    @for (o of outcomes; track o) {
+      <button class="pill" [class.on]="outcomeFilter() === o" (click)="outcomeFilter.set(o)">
+        <i [style.background]="color[o]"></i>{{ label[o] }} <b class="num">{{ counts()[o] ?? 0 }}</b>
+      </button>
+    }
+  </div>
+
+  @if (paused() && newWhilePaused() > 0) {
+    <button class="newbar" (click)="togglePause()">▲ {{ newWhilePaused() }} new result{{ newWhilePaused() === 1 ? '' : 's' }}. Click to resume</button>
+  }
+
+  <div class="rows">
+    @for (r of visible(); track r.jobId) {
+      <div class="slot" [class.fresh]="isFresh(r)">
+        <div class="clip">
+      <article class="row card">
+        <div class="img">
+          <app-image-placeholder [accent]="color[r.outcome]" [alt]="r.imageReference" />
+          <div class="imgname mono" [title]="r.imageReference">{{ r.imageReference }}</div>
+        </div>
+
+        <div class="meta">
+          <div class="line">
+            <span class="chip" [class]="chip[r.outcome]">{{ label[r.outcome] }}</span>
+            @if (r.batchName) { <span class="chip slate">{{ r.batchName }}</span> }
+            <span class="when muted" [title]="r.completedAt">{{ ago(r.completedAt, now()) }}</span>
+          </div>
+
+          <dl>
+            <dt>Job ID</dt>
+            <dd class="mono">{{ r.jobId }} <button class="mini" (click)="copy(r.jobId, 'Job id')">copy</button></dd>
+            <dt>Image ref</dt><dd class="mono">{{ r.imageReference }}</dd>
+            <dt>Client ref</dt><dd>{{ r.clientReference }}</dd>
+            <dt>Confidence</dt>
+            <dd class="confcell">
+              <span class="conf"><i [style.width.%]="r.ocr.confidence * 100" [style.background]="confColor(r.ocr.confidence)"></i></span>
+              <b class="num">{{ (r.ocr.confidence * 100).toFixed(1) }}%</b>
+            </dd>
+            <dt>OCR time</dt><dd class="num">{{ dur(r.ocr.durationMs) }} <span class="muted">· {{ pid(r.ocrWorkerId) }}</span></dd>
+          </dl>
+
+          @if (r.reasonCodes.length) {
+            <div class="reasons">
+              @for (c of r.reasonCodes; track c) { <span class="chip slate mono">{{ c }}</span> }
+            </div>
+          }
+          <button class="btn sm" (click)="open(r)">Job details →</button>
+        </div>
+
+        <div class="json">
+          <div class="jhead">
+            <span>OCR output</span>
+            <button class="mini light" (click)="copy(json.text(), 'JSON')">copy JSON</button>
+          </div>
+          <app-json-view #json [value]="jsonFor(r)" />
+        </div>
+      </article>
+        </div>
+      </div>
+    } @empty {
+      <div class="card empty">
+        @if (outcomeFilter()) { No results with this outcome yet. }
+        @else { Waiting for results… Submit jobs from the top bar and they will appear here as each one finishes OCR. }
+      </div>
+    }
+  </div>
+
+  @if (hidden() > 0) {
+    <div class="more"><button class="btn" (click)="limit.set(limit() + 30)">Show {{ hidden() < 30 ? hidden() : 30 }} more ({{ hidden() }} hidden)</button></div>
+  }
+</div>

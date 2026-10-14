@@ -1,16 +1,16 @@
-# Mock OCR Pipeline Demo (Egyptian National ID)
+﻿# Mock OCR Pipeline Demo (Egyptian National ID)
 
 A proof-of-concept showing how thousands of ID-image OCR jobs can be processed asynchronously by independently scalable workers. All OCR output is **synthetic**; there are no real images or personal data.
 
 ```
-POST /api/jobs ─► OcrDemo.Api ─► PostgreSQL (job saved first)
-                      │
-                      └─► RabbitMQ [ocr-jobs] ─► Python OCR worker ×N ─► RabbitMQ [ocr-results]
-                                                     │                          │
-                                  [job-events] ◄─────┘ (side channel:           │
-                                       │        "OCR started", dashboard only)  │
-                                       ▼                                        ▼
-GET /api/jobs/{id} ◄── PostgreSQL ◄── OcrDemo.BusinessWorker ×M (consumes both queues)
+POST /api/jobs â”€â–º OcrDemo.Api â”€â–º PostgreSQL (job saved first)
+                      â”‚
+                      â””â”€â–º RabbitMQ [ocr-jobs] â”€â–º Python OCR worker Ã—N â”€â–º RabbitMQ [ocr-results]
+                                                     â”‚                          â”‚
+                                  [job-events] â—„â”€â”€â”€â”€â”€â”˜ (side channel:           â”‚
+                                       â”‚        "OCR started", dashboard only)  â”‚
+                                       â–¼                                        â–¼
+GET /api/jobs/{id} â—„â”€â”€ PostgreSQL â—„â”€â”€ OcrDemo.BusinessWorker Ã—M (consumes both queues)
 ```
 
 Queues: `ocr-jobs` (work), `ocr-results` (OCR output), and `job-events` (best-effort "OCR started" notices so the dashboard can show a job as in progress; nothing depends on it).
@@ -58,16 +58,17 @@ Instance counts are not configured anywhere; start as many processes as you want
 ## API
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/jobs` | `{ "clientReference": "C1", "imageReference": "id-001.jpg" }` → `202` + `jobId` + `statusUrl` |
-| POST | `/api/jobs/batch` | `{ "count": 1000, "clientReferencePrefix": "LOAD" }` → `202` (max 10,000, config `Batch:MaxSize`) |
+| POST | `/api/jobs` | `{ "clientReference": "C1", "imageReference": "id-001.jpg" }` â†’ `202` + `jobId` + `statusUrl` |
+| POST | `/api/jobs/batch` | `{ "count": 1000, "clientReferencePrefix": "LOAD" }` â†’ `202` (max 10,000, config `Batch:MaxSize`) |
 | GET | `/api/jobs/{id}` | status, outcome, reason codes, OCR output, timestamps, `resultDeliveries` |
 | GET | `/api/jobs` | paged table: `?page=&pageSize=&status=&outcome=&batchId=&search=` |
 | GET | `/api/stats` | counts by status and outcome |
 | GET | `/api/dashboard/stream` | server-sent events: a full snapshot every second (totals, throughput, queues, workers, batches) |
 | GET | `/api/dashboard/snapshot` | the same snapshot, once |
+| GET | `/api/results/stream` | server-sent events: one message per finished job (OCR output, outcome, reason codes); starts with the latest `?backlog=30` results (sent as `event: backlog`, so the UI can tell them from live ones), then pushes new ones as they complete |
 | GET | `/health` | API + DB health |
 
-Status: `Queued` → `OcrInProgress` (an OCR worker picked it up) → `Completed`. Outcome: `Succeeded`, `ValidationFailed`, `ManualReview`, `OcrFailed`, `TechnicalError` (reserved; see Limitations).
+Status: `Queued` â†’ `OcrInProgress` (an OCR worker picked it up) â†’ `Completed`. Outcome: `Succeeded`, `ValidationFailed`, `ManualReview`, `OcrFailed`, `TechnicalError` (reserved; see Limitations).
 
 ## Dashboard
 The Angular dashboard in `../frontend` reads the stream above. Queue and worker data come from the RabbitMQ management HTTP API (`RabbitMq:ManagementUrl`, default `http://localhost:15672`, same credentials), proxied by the API so the browser never talks to RabbitMQ. CORS allows `http://localhost:4200` (`Cors:Origins`).
