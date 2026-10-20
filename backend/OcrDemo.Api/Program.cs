@@ -7,7 +7,10 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOcrDb(builder.Configuration);
 builder.Services.AddSingleton<JobPublisher>();
-builder.Services.AddHttpClient<RabbitManagement>((sp, c) => RabbitManagement.Configure(c, sp.GetRequiredService<IConfiguration>()));
+// UseProxy=false: on machines with a system proxy configured, HttpClient would route
+// localhost:15672 through it (the proxy refuses loopback requests with 400).
+builder.Services.AddHttpClient<RabbitManagement>((sp, c) => RabbitManagement.Configure(c, sp.GetRequiredService<IConfiguration>()))
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { UseProxy = false });
 builder.Services.AddSingleton<DashboardService>();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
     .WithOrigins(builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? ["http://localhost:4200"])
