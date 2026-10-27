@@ -67,6 +67,9 @@ namespace OcrDemo.Shared.Migrations
                     b.Property<int?>("OcrDurationMs")
                         .HasColumnType("integer");
 
+                    b.Property<System.Text.Json.JsonDocument>("OcrDetails")
+                        .HasColumnType("jsonb");
+
                     b.Property<string>("OcrOutcome")
                         .HasColumnType("text");
 

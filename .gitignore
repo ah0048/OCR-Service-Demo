@@ -7,3 +7,5 @@ __pycache__/
 node_modules/
 dist/
 .angular/
+.data/
+try1/images/

@@ -1,6 +1,6 @@
-<div class="frame">
-  @if (src(); as url) {
-    <img [src]="url" [alt]="alt()" />
+<div class="frame" [style.height]="naturalAspect() ? null : frameHeight()" [style.aspect-ratio]="naturalAspect() ? naturalRatio() : frameHeight() ? 'auto' : null">
+  @if (imageUrl(); as url) {
+    <img [src]="url" [alt]="alt()" [style.object-fit]="fit()" (load)="imageLoaded($event)" />
   } @else if (side() === 'front') {
     <svg viewBox="0 0 160 101" class="card-art" role="img" [attr.aria-label]="alt() + ' front (placeholder)'">
       <rect x="1" y="1" width="158" height="99" rx="9" fill="#f7f9fd" stroke="#cdd6e8" stroke-width="1.5" />
@@ -46,6 +46,6 @@
       <rect x="100" y="76" width="47" height="14" rx="2" fill="#eef2fa" stroke="#d3dbe9" stroke-width="1" />
     </svg>
   }
-  @if (!src()) { <span class="tag">placeholder</span> }
+  @if (!imageUrl()) { <span class="tag">placeholder</span> }
 </div>
-<span class="side">{{ side() === 'front' ? 'Front' : 'Back' }}</span>
+@if (showSideLabel()) { <span class="side">{{ side() === 'front' ? 'Front' : 'Back' }}</span> }

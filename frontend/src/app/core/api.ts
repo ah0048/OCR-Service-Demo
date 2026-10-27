@@ -26,11 +26,22 @@ export class Api {
     return this.http.get<JobDetail>(`${API_URL}/api/jobs/${id}`);
   }
 
-  submitJob(clientReference: string, imageReference: string): Observable<SubmitResult> {
-    return this.http.post<SubmitResult>(`${API_URL}/api/jobs`, { clientReference, imageReference });
+  uploadJob(clientReference: string, front: File, back: File): Observable<SubmitResult> {
+    const form = new FormData();
+    form.append('clientReference', clientReference);
+    form.append('front', front);
+    form.append('back', back);
+    return this.http.post<SubmitResult>(API_URL + '/api/jobs/upload', form);
   }
 
-  submitBatch(count: number, clientReferencePrefix: string): Observable<BatchResult> {
-    return this.http.post<BatchResult>(`${API_URL}/api/jobs/batch`, { count, clientReferencePrefix });
+  uploadBatch(batchName: string, pairs: { reference: string; front: File; back: File }[]): Observable<BatchResult> {
+    const form = new FormData();
+    form.append('batchName', batchName);
+    for (const pair of pairs) {
+      form.append('clientReference', pair.reference);
+      form.append('front', pair.front);
+      form.append('back', pair.back);
+    }
+    return this.http.post<BatchResult>(API_URL + '/api/jobs/batch/upload', form);
   }
 }

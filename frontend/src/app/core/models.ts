@@ -1,5 +1,5 @@
 export type JobStatus = 'Queued' | 'OcrInProgress' | 'Completed';
-export type JobOutcome = 'Succeeded' | 'ValidationFailed' | 'ManualReview' | 'OcrFailed' | 'TechnicalError';
+export type JobOutcome = 'Succeeded' | 'ValidationFailed' | 'ManualReview' | 'OcrFailed' | 'TechnicalError' | 'Rejected';
 
 export interface QueueStat {
   name: string;
@@ -42,6 +42,8 @@ export interface BatchSummary {
   validationFailed: number;
   manualReview: number;
   ocrFailed: number;
+  technicalError: number;
+  rejected: number;
   createdAt: string;
   lastCompletedAt: string | null;
 }
@@ -82,7 +84,7 @@ export interface JobPage { total: number; page: number; pageSize: number; items:
 
 export interface JobDetail extends JobRow {
   correlationId: string;
-  ocr: { outcome: string; confidence: number; durationMs: number; modelVersion: string; fields: Record<string, string> | null } | null;
+  ocr: { outcome: string; confidence: number | null; details?: Record<string, unknown> | null; durationMs: number; modelVersion: string; fields: Record<string, string> | null } | null;
 }
 
 export interface JobFilter {
@@ -96,6 +98,7 @@ export interface JobFilter {
 
 export const OUTCOME_COLOR: Record<string, string> = {
   Succeeded: '#1f9d6b',
+  Rejected: '#b42318',
   ValidationFailed: '#dc4350',
   ManualReview: '#e39a1b',
   OcrFailed: '#7c5cdb',
@@ -104,6 +107,7 @@ export const OUTCOME_COLOR: Record<string, string> = {
 
 export const OUTCOME_CHIP: Record<string, string> = {
   Succeeded: 'ok',
+  Rejected: 'bad',
   ValidationFailed: 'bad',
   ManualReview: 'warn',
   OcrFailed: 'violet',
@@ -112,6 +116,7 @@ export const OUTCOME_CHIP: Record<string, string> = {
 
 export const OUTCOME_LABEL: Record<string, string> = {
   Succeeded: 'Succeeded',
+  Rejected: 'Rejected',
   ValidationFailed: 'Validation failed',
   ManualReview: 'Manual review',
   OcrFailed: 'OCR failed',
@@ -129,7 +134,7 @@ export interface ResultItem {
   batchName: string | null;
   outcome: JobOutcome;
   reasonCodes: string[];
-  ocr: { outcome: string; confidence: number; durationMs: number; modelVersion: string; fields: Record<string, string> | null };
+  ocr: { outcome: string; confidence: number | null; details?: Record<string, unknown> | null; durationMs: number; modelVersion: string; fields: Record<string, string> | null };
   ocrWorkerId: string | null;
   businessWorkerId: string | null;
   createdAt: string;

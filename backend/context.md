@@ -1,32 +1,20 @@
-# Context (for resuming development)
+# Current project context
 
-## Decisions (user-approved, intentionally simple)
-No outbox (API saves to DB then publishes directly), no retry/delay queues, no metrics stack, classic durable queues, persistent messages, manual acks, `prefetch=1` fair dispatch. All backend code under `backend/`. Frontend (`../frontend`, only image assets so far) comes later. DLQ args kept (cheap) for malformed/unknown-job messages.
+As of 2026-10-20, the queue pipeline uses the real offline OCR project in `../try1`, through `ocr-worker/inference.py`. The OCR API is not involved.
 
-## Status: backend implemented and verified locally
-- Docker Compose (RabbitMQ 4 mgmt, Postgres 17, volumes, healthchecks). **Postgres is published on 5433** because a native Postgres owns 5432 on this machine.
-- `OcrDemo.Shared` (contracts, EF Core, migration `InitialCreate`), `OcrDemo.Api` (http://localhost:5125), `OcrDemo.BusinessWorker`, `ocr-worker` (Python, pika 1.3.2, venv in `ocr-worker/.venv`), `scripts/start-workers.ps1`, `scripts/load-test.ps1`.
-- Verified: 202 on submit; batch of 100 accepted in ~0.6 s; 3 OCR + 2 business workers finished 100 jobs in 72 s; restart recovery (unprocessed messages/rows survive); duplicate result ignored (`resultDeliveries` increments only).
+- API single/batch multipart uploads save front/back pairs to shared storage; JSON endpoints can requeue existing uploaded references. The old synthetic count-only batches are replaced.
+- The default shared store is `<repo>/.data/images`; configure `Images__Root` and `OCR_IMAGE_ROOT` together on other hosts.
+- Each worker preloads models before consuming, uses prefetch 1 and runs inference on a separate thread while Pika services heartbeats.
+- Detailed reports are persisted in nullable JSONB `jobs.OcrDetails` (migration `AddOcrDetails`). All extracted string fields remain in `ExtractedFields`; birth date is derived from national ID.
+- New real results have a heuristic confidence: mean field evidence, recognition/detection scores documented per field, missing required fields zero, ID gate failure zero. Acceptance uses the configured confidence threshold alone (default 75%), overriding model review flags and field/date validation; ID conflicts, unreadable images and technical failures remain separate terminal outcomes. Existing completed results keep their original confidence.
+- Actual front/back ID conflicts finish as Rejected with FRONT_BACK_ID_MISMATCH (lifecycle Completed). Invalid image pairs finish as OcrFailed; unhandled inference errors finish as TechnicalError. Broker/database failures still use at-least-once delivery and duplicate result protection.
+- Angular single and batch dialogs upload real pairs. Batch filenames must be numeric person-number_1.ext (front) and the same person-number_2.ext (back); both API and frontend enforce this and pair independently of selection order. The job drawer has an independent one-second elapsed/queue/OCR timer that freezes at completion. The results and business views show original images, all fields and review outcomes. The technical JSON includes extraction evidence.
+- `scripts/start-workers.ps1` launches hidden background instances and prints PIDs/log locations. Its default interpreter is `../try1/.venv/Scripts/python.exe`; install pika there from `ocr-worker/requirements.txt`. Fresh environments use `requirements.real.txt`.
+- Python regressions: `python -m unittest discover -s backend/ocr-worker -p test_worker.py` from repo root with an environment containing pika.
+- End-to-end check: `scripts/verify-integration.py`, which accepts sample front/back paths. Verified locally: single upload 202 in ~0.55s, real CPU OCR ~123s, 12 extracted/derived fields, manual review, batch corrupt-image handling, DB persistence, previews, SSE and duplicate-result idempotency.
+- Backend and Angular builds pass. Angular retains an existing navbar stylesheet budget warning.
+- `try1/` is an existing nested Git checkout, currently untracked by the outer repository. Model assets are private/offline; do not delete the nested repository or commit weights as part of this integration.
 
-## Commands
-See README.md. Dev API port comes from `OcrDemo.Api/Properties/launchSettings.json` (5125).
+Remaining limitations: no transactional outbox, no delayed inference retries, no application authentication/retention policy, and no application Dockerfiles. See README.md for current contracts, configuration and setup. Infrastructure uses RabbitMQ 4 and PostgreSQL 17 (host port 5433). Stop API/business processes before a rebuild if Windows locks their DLLs.
 
-## Gotchas
-- Npgsql needs `EnableDynamicJson()` for Dictionary/List jsonb (done in `DbRegistration.AddOcrDb`).
-- Message `startedAt` is `DateTimeOffset` (Python sends an offset-aware ISO string).
-- Rebuilding while workers run fails (DLL locks); stop them first.
-- In this environment, long bash heredocs failed once; use the Write tool for files, and PowerShell `Start-Process` for detached processes.
-
-## Frontend (Angular 22, `../frontend`)
-Layout: `core/` (services, models), `components/<name>/` and `pages/<name>/`, each with .ts/.html/.scss. Pages: Overview, Queues & workers, Jobs (live table), Batches, plus a job drawer and a submit dialog. Data: one SSE stream (`DashboardStore`) plus REST for the jobs table/drawer. Brand images are in `frontend/public` (cover banner, EGX logo, emblem; `unnamed.png` is the reference screenshot). API URL constant: `frontend/src/app/api.ts`. Run: `cd frontend; npm install; npm start` -> http://localhost:4200.
-
-Two result pages share one stream and one view helper (`core/results-feed.ts`): Tech view (`/results`, JSON + technical details) and Business view (`/business`, extracted fields only). Results stream: `GET /api/results/stream` (SSE, polls the DB every 500 ms, re-checks the last 5 s and de-duplicates by job id because several business workers can commit out of timestamp order) feeds `core/results-store.ts`. Images are placeholders for now (`ImageReference` is just a string).
-
-## Not done / outstanding
-- No automated tests (integration tests were not built, to keep it simple); verification was manual.
-- Not verified: DB-outage recovery and DLQ via dashboard (described in README, behavior follows from the code).
-- No attempt limit on requeue; `TechnicalError` outcome is never persisted; no outbox (documented limitations).
-- Containerizing the apps (Dockerfiles) is only described in the README.
-- Dashboard has no automated tests; verified with headless Edge screenshots. Latency stats use the last 5 minutes of completions. Chart history starts empty on page load (client-side).
-
-UI sizing: everything is rem-based and scales with screen width and the A-/A+ control (see frontend/README.md, 'Large, clear display'). Do not reintroduce fixed px sizes or screen-pixel media queries; use rem and @container queries.
+UI sizing remains rem-based with container queries and the A-/A+ control. The API URL is in `frontend/src/app/core/api.ts`.

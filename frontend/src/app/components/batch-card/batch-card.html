@@ -13,9 +13,11 @@
   <app-seg-bar [segments]="segments()" [total]="total()" size="lg" />
 
   <div class="legend">
+    <span><i style="background:#b42318"></i>Rejected <b class="num">{{ batch().rejected }}</b></span>
     <span><i style="background:#1f9d6b"></i>Succeeded <b class="num">{{ batch().succeeded }}</b></span>
     <span><i style="background:#e39a1b"></i>Manual review <b class="num">{{ batch().manualReview }}</b></span>
     <span><i style="background:#dc4350"></i>Validation failed <b class="num">{{ batch().validationFailed }}</b></span>
+    <span><i style="background:#64748b"></i>Technical error <b class="num">{{ batch().technicalError }}</b></span>
     <span><i style="background:#7c5cdb"></i>OCR failed <b class="num">{{ batch().ocrFailed }}</b></span>
     <span><i style="background:#3b82f6"></i>In OCR / validation <b class="num">{{ batch().inProgress }}</b></span>
     <span><i style="background:#c3cad8"></i>Waiting <b class="num">{{ batch().queued }}</b></span>

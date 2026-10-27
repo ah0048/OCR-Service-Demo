@@ -14,7 +14,7 @@ namespace OcrDemo.BusinessWorker;
 public sealed class ResultConsumer(IServiceScopeFactory scopes, IConfiguration config, ILogger<ResultConsumer> log) : BackgroundService
 {
     private readonly string _workerId = $"business-{Environment.MachineName}-{Environment.ProcessId}";
-    private readonly double _threshold = config.GetValue("Business:ConfidenceThreshold", 0.80);
+    private readonly double _threshold = config.GetValue("Business:ConfidenceThreshold", 0.75);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -91,9 +91,10 @@ public sealed class ResultConsumer(IServiceScopeFactory scopes, IConfiguration c
             return null;
         }
 
-        var (outcome, reasons) = BusinessRules.Evaluate(msg, _threshold, DateTime.UtcNow.Date);
+        var (outcome, reasons) = BusinessRules.Evaluate(msg, _threshold);
         job.OcrOutcome = msg.OcrOutcome;
         job.ExtractedFields = msg.ExtractedFields;
+        job.OcrDetails = msg.Details;
         job.Confidence = msg.Confidence;
         job.OcrDurationMs = msg.ProcessingMs;
         job.ModelVersion = msg.ModelVersion;

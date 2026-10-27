@@ -33,8 +33,8 @@
       <article class="row card">
         <div class="img">
           <div class="pair">
-            <app-image-placeholder side="front" [accent]="color[r.outcome]" [alt]="r.imageReference" />
-            <app-image-placeholder side="back" [accent]="color[r.outcome]" [alt]="r.imageReference" />
+            <app-image-placeholder [jobId]="r.jobId" [imageReference]="r.imageReference" side="front" [accent]="color[r.outcome]" [alt]="r.imageReference" />
+            <app-image-placeholder [jobId]="r.jobId" [imageReference]="r.imageReference" side="back" [accent]="color[r.outcome]" [alt]="r.imageReference" />
           </div>
           <div class="imgname mono" [title]="r.imageReference">{{ r.imageReference }}</div>
         </div>
@@ -51,10 +51,10 @@
             <dd class="mono">{{ r.jobId }} <button class="mini" (click)="copy(r.jobId, 'Job id')">copy</button></dd>
             <dt>Image ref</dt><dd class="mono">{{ r.imageReference }}</dd>
             <dt>Client ref</dt><dd>{{ r.clientReference }}</dd>
-            <dt>Confidence</dt>
+            <dt>Calculated confidence</dt>
             <dd class="confcell">
-              <span class="conf"><i [style.width.%]="r.ocr.confidence * 100" [style.background]="confColor(r.ocr.confidence)"></i></span>
-              <b class="num">{{ (r.ocr.confidence * 100).toFixed(1) }}%</b>
+              <span class="conf"><i [style.width.%]="(r.ocr.confidence ?? 0) * 100" [style.background]="confColor(r.ocr.confidence ?? 0)"></i></span>
+              <b class="num">{{ r.ocr.confidence === null ? 'Review required' : (r.ocr.confidence * 100).toFixed(1) + '%' }}</b>
             </dd>
             <dt>OCR time</dt><dd class="num">{{ dur(r.ocr.durationMs) }} <span class="muted">· {{ pid(r.ocrWorkerId) }}</span></dd>
           </dl>

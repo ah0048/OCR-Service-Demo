@@ -7,6 +7,13 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOcrDb(builder.Configuration);
 builder.Services.AddSingleton<JobPublisher>();
+builder.Services.AddSingleton<ImageStore>();
+builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = ImageStore.MaxUploadBytes);
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
+{
+    o.MultipartBodyLengthLimit = ImageStore.MaxUploadBytes;
+    o.ValueCountLimit = 1000;
+});
 // UseProxy=false: on machines with a system proxy configured, HttpClient would route
 // localhost:15672 through it (the proxy refuses loopback requests with 400).
 builder.Services.AddHttpClient<RabbitManagement>((sp, c) => RabbitManagement.Configure(c, sp.GetRequiredService<IConfiguration>()))
@@ -71,25 +78,99 @@ async Task<IResult> Submit(IReadOnlyList<Job> jobs, OcrDbContext db, JobPublishe
     return ok();
 }
 
-app.MapPost("/api/jobs", async (SubmitJobRequest req, OcrDbContext db, JobPublisher publisher, CancellationToken ct) =>
+app.MapPost("/api/jobs", async (SubmitJobRequest req, OcrDbContext db, JobPublisher publisher, ImageStore images, CancellationToken ct) =>
 {
-    if (string.IsNullOrWhiteSpace(req.ClientReference) || string.IsNullOrWhiteSpace(req.ImageReference))
-        return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = ["clientReference and imageReference are required"] });
+    if (string.IsNullOrWhiteSpace(req.ClientReference) || string.IsNullOrWhiteSpace(req.ImageReference) ||
+        images.PairDirectory(req.ImageReference) is null)
+        return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = ["clientReference and an existing uploaded imageReference are required; upload front/back files at /api/jobs/upload"] });
     var job = NewJob(req.ClientReference, req.ImageReference);
     return await Submit([job], db, publisher, ct,
         () => Results.Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id, statusUrl = $"/api/jobs/{job.Id}" }));
 });
 
-app.MapPost("/api/jobs/batch", async (BatchRequest req, OcrDbContext db, JobPublisher publisher, IConfiguration config, CancellationToken ct) =>
+app.MapPost("/api/jobs/batch", async (BatchRequest req, OcrDbContext db, JobPublisher publisher, ImageStore images, IConfiguration config, CancellationToken ct) =>
 {
     var max = config.GetValue("Batch:MaxSize", 10000);
-    if (req.Count < 1 || req.Count > max)
-        return Results.ValidationProblem(new Dictionary<string, string[]> { ["count"] = [$"count must be between 1 and {max}"] });
-    var prefix = string.IsNullOrWhiteSpace(req.ClientReferencePrefix) ? "LOAD" : req.ClientReferencePrefix;
+    if (req.Jobs is null || req.Jobs.Count < 1 || req.Jobs.Count > max ||
+        req.Jobs.Any(j => string.IsNullOrWhiteSpace(j.ClientReference) || string.IsNullOrWhiteSpace(j.ImageReference) || images.PairDirectory(j.ImageReference) is null))
+        return Results.ValidationProblem(new Dictionary<string, string[]> { ["jobs"] = [$"Provide 1 to {max} jobs with clientReference and existing uploaded imageReference"] });
     var batchId = Guid.NewGuid();
-    var jobs = Enumerable.Range(1, req.Count).Select(i => NewJob($"{prefix}-{i}", $"mock-id-{Guid.NewGuid():N}.jpg", batchId, prefix)).ToList();
+    var jobs = req.Jobs.Select(j => NewJob(j.ClientReference, j.ImageReference, batchId, req.BatchName)).ToList();
     return await Submit(jobs, db, publisher, ct,
         () => Results.Accepted("/api/dashboard/snapshot", new { batchId, count = jobs.Count, firstJobId = jobs[0].Id }));
+});
+
+// The API only saves files and enqueues references. Model inference never runs here.
+async Task<IResult> Upload(HttpRequest request, bool batch, OcrDbContext db, JobPublisher publisher, ImageStore images, CancellationToken ct)
+{
+    IResult Invalid(string message) => Results.ValidationProblem(new Dictionary<string, string[]> { ["images"] = [message] });
+    if (!request.HasFormContentType) return Invalid("Use multipart/form-data with front and back image files");
+    IFormCollection form;
+    try { form = await request.ReadFormAsync(ct); }
+    catch (InvalidDataException) { return Invalid("Invalid multipart upload or upload exceeds 256 MB"); }
+    var fronts = form.Files.GetFiles("front");
+    var backs = form.Files.GetFiles("back");
+    var max = batch ? app.Configuration.GetValue("Batch:MaxUploadSize", 100) : 1;
+    if (fronts.Count < 1 || fronts.Count > max || fronts.Count != backs.Count ||
+        form.Files.Count != fronts.Count + backs.Count)
+        return Invalid($"Upload 1 to {max} matched front/back pairs, using only front and back file fields");
+    string[] refs;
+    if (batch)
+    {
+        // Match by person number on the server as well; multipart order is irrelevant.
+        if (!BatchImagePairs.TryMatch(form.Files, out var pairs, out var error)) return Invalid(error);
+        fronts = pairs.Select(p => p.Front).ToArray();
+        backs = pairs.Select(p => p.Back).ToArray();
+        refs = pairs.Select(p => p.Reference).ToArray();
+    }
+    else
+    {
+        refs = form["clientReference"].Select(r => r ?? "").ToArray();
+        if (refs.Length != 1 || string.IsNullOrWhiteSpace(refs[0]))
+            return Invalid("Provide a nonempty clientReference");
+    }
+    for (var i = 0; i < fronts.Count; i++)
+        if (!await ImageStore.IsValidAsync(fronts[i], ct) || !await ImageStore.IsValidAsync(backs[i], ct))
+            return Invalid("Each image must be JPEG, PNG, WEBP, BMP or TIFF, at most 20 MB");
+
+    var batchId = batch ? Guid.NewGuid() : (Guid?)null;
+    var jobs = Enumerable.Range(0, fronts.Count).Select(i =>
+        NewJob(refs[i]!, "", batchId, batch ? form["batchName"].ToString() : null)).ToList();
+    try
+    {
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            jobs[i].ImageReference = jobs[i].Id.ToString("N");
+            await images.SaveAsync(jobs[i].Id, fronts[i], backs[i], ct);
+        }
+    }
+    catch
+    {
+        foreach (var job in jobs) images.Remove(job.Id);
+        throw;
+    }
+    return await Submit(jobs, db, publisher, ct, () => batch
+        ? Results.Accepted("/api/dashboard/snapshot", new { batchId, count = jobs.Count, firstJobId = jobs[0].Id })
+        : Results.Accepted($"/api/jobs/{jobs[0].Id}", new { jobId = jobs[0].Id, statusUrl = $"/api/jobs/{jobs[0].Id}" }));
+}
+
+app.MapPost("/api/jobs/upload", (HttpRequest request, OcrDbContext db, JobPublisher publisher, ImageStore images, CancellationToken ct) =>
+    Upload(request, false, db, publisher, images, ct));
+app.MapPost("/api/jobs/batch/upload", (HttpRequest request, OcrDbContext db, JobPublisher publisher, ImageStore images, CancellationToken ct) =>
+    Upload(request, true, db, publisher, images, ct));
+
+app.MapGet("/api/jobs/{id:guid}/images/{side}", async (Guid id, string side, HttpContext context, OcrDbContext db, ImageStore images, CancellationToken ct) =>
+{
+    if (side is not ("front" or "back")) return Results.NotFound();
+    var job = await db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == id, ct);
+    var directory = job is null ? null : images.PairDirectory(job.ImageReference);
+    if (directory is null) return Results.NotFound();
+    var path = Path.Combine(directory, side);
+    var header = new byte[16];
+    await using (var stream = File.OpenRead(path)) await stream.ReadAtLeastAsync(header, 12, throwOnEndOfStream: false, cancellationToken: ct);
+    context.Response.Headers.CacheControl = "no-store";
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    return Results.File(path, ImageStore.ContentType(header) ?? "application/octet-stream");
 });
 
 app.MapGet("/api/jobs/{id:guid}", async (Guid id, OcrDbContext db, CancellationToken ct) =>
@@ -98,7 +179,7 @@ app.MapGet("/api/jobs/{id:guid}", async (Guid id, OcrDbContext db, CancellationT
         {
             jobId = j.Id, j.CorrelationId, j.BatchId, j.BatchName, j.OcrWorkerId, j.BusinessWorkerId, j.ClientReference, j.ImageReference,
             status = j.Status.ToString(), outcome = j.Outcome?.ToString(), j.ReasonCodes,
-            ocr = j.OcrOutcome is null ? null : new { outcome = j.OcrOutcome, j.Confidence, durationMs = j.OcrDurationMs, j.ModelVersion, fields = j.ExtractedFields },
+            ocr = j.OcrOutcome is null ? null : new { outcome = j.OcrOutcome, j.Confidence, durationMs = j.OcrDurationMs, j.ModelVersion, fields = j.ExtractedFields, details = j.OcrDetails },
             j.CreatedAt, j.StartedAt, j.CompletedAt, j.ResultDeliveries,
         })
         : Results.NotFound());
@@ -123,4 +204,4 @@ app.MapGet("/api/stats", async (OcrDbContext db, CancellationToken ct) =>
 app.Run();
 
 record SubmitJobRequest(string ClientReference, string ImageReference);
-record BatchRequest(int Count, string? ClientReferencePrefix);
+record BatchRequest(List<SubmitJobRequest>? Jobs, string? BatchName);

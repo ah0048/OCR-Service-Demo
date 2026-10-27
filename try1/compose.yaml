@@ -1,0 +1,26 @@
+services:
+  front-id-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: front-id-api:production
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8000:8000"
+    environment:
+      DEVICE: cpu
+      QARI_THREADS: "4"
+      QARI_MAX_PIXELS: "200704"
+    volumes:
+      - front-id-output:/app/outputs
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+
+volumes:
+  front-id-output:

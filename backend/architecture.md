@@ -1,5 +1,7 @@
 # Architecture
 
+Real OCR integration (2026-10-20): the API stores front/back uploads under a shared image root. Python workers load the existing offline models once and call `pipeline.document.run_document` directly from `try1`. RabbitMQ carries image-pair references; result messages include all fields plus the detailed report. See [README.md](README.md) for current setup and upload contracts.
+
 ```
 Client ──► OcrDemo.Api ──1.save job──► PostgreSQL
               │ 2.publish (persistent, confirmed)
@@ -23,7 +25,7 @@ Client ◄── GET /api/jobs/{id} ◄── OcrDemo.Api ◄── PostgreSQL
 | `OcrDemo.Api` | Minimal API: submit/batch/status/stats. Saves the job, publishes to `ocr-jobs`. No consumers. |
 | `OcrDemo.BusinessWorker` | Two `BackgroundService`s in one process: `ResultConsumer` (`ocr-results`: applies business rules, persists the outcome) and `ProgressConsumer` (`job-events`: marks a job `OcrInProgress`). |
 | `OcrDemo.Shared` | Message contracts, queue names/declaration, EF Core `DbContext`, entity, migrations. |
-| `ocr-worker` | Python. `worker.py` = messaging; `inference.py` = isolated mock `run_ocr()` to replace with the real model. |
+| `ocr-worker` | Python. `worker.py` = messaging; `inference.py` = direct adapter to the real `try1` document pipeline. |
 
 ## Queues
 | Queue | Producer | Consumer | Purpose |
@@ -36,21 +38,23 @@ All three are durable classic queues, persistent messages, manual ack, `prefetch
 
 ## Message contracts (JSON, camelCase)
 `ocr-jobs`: `{ jobId, correlationId, clientReference, imageReference }` (no image bytes).
-`ocr-results`: `{ jobId, correlationId, ocrOutcome: Success|Unreadable|LowConfidence, extractedFields{nationalId,fullName,birthDate,expiryDate}|null, confidence, processingMs, startedAt, modelVersion, workerId }`.
+`ocr-results`: `{ jobId, correlationId, ocrOutcome: Success|Unreadable|LowConfidence|Rejected|TechnicalError, extractedFields{nationalId,fullName,birthDate,expiryDate,address,...}|null, details, confidence (nullable), processingMs, startedAt, modelVersion, workerId }`.
 `job-events`: `{ jobId, workerId, startedAt }`, published by the Python worker right before it runs OCR.
 AMQP `message_id` = jobId, `correlation_id` = correlationId.
 
 ## State
 `Status`: `Queued` → `OcrInProgress` → `Completed`. `OcrInProgress` is set by `ProgressConsumer` from a `job-events` message, only `WHERE Status = 'Queued'`, so it can never move a job backwards. It is optional: if the event is lost or arrives after the result, the job simply goes `Queued` → `Completed`. `Completed` is terminal and is set once, in the business worker's transaction.
-`Outcome` (business result, set with Completed): `Succeeded` | `ValidationFailed` | `ManualReview` | `OcrFailed` | (`TechnicalError` reserved).
-Rules (`BusinessRules.cs`): Unreadable → `OcrFailed`; LowConfidence or confidence < threshold (0.80) → `ManualReview`; else check name present, birth date valid, 14-digit national ID consistent with birth date, expiry not in the past → `Succeeded` / `ValidationFailed` with reason codes.
+`Outcome` (business result, set with Completed): `Succeeded` | `ValidationFailed` | `ManualReview` | `OcrFailed` | `TechnicalError`.
+Rules (`BusinessRules.cs`): ID conflicts produce Rejected; technical errors produce TechnicalError; unreadable/null-field results produce OcrFailed. Otherwise a valid overall confidence >= configured threshold (default 0.75) produces Succeeded, overriding model review flags and field/date checks. Below-threshold or unavailable/invalid scores produce ManualReview. The heuristic score calculation is documented in README.
 Business rejections are final results (acked), not errors.
 
 ## Failure handling
 | Situation | Behavior |
 |---|---|
 | Malformed message / unknown job | `nack requeue=false` → `<queue>.dlq` |
-| Exception in consumer (e.g. DB down) | sleep 3 s, `nack requeue=true` (no attempt limit) |
+| Database exception in business consumer (e.g. DB down) | sleep 3 s, `nack requeue=true` (no attempt limit) |
+| Model inference exception | terminal TechnicalError result, then normal confirmed publication and acknowledgement |
+| Invalid image pair | terminal Unreadable result |
 | Worker crash before ack | broker redelivers to another consumer |
 | Duplicate result | row lock + `Status==Completed` check → ignored, `ResultDeliveries++` |
 | Publish fails in API | job stays `Queued` in DB, API returns 503 (no outbox) |

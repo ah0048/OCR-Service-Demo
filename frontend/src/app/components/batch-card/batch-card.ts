@@ -44,9 +44,11 @@ export class BatchCard {
   segments = computed<Seg[]>(() => {
     const b = this.batch();
     return [
+      { value: b.rejected, color: OUTCOME_COLOR['Rejected'], label: 'Rejected' },
       { value: b.succeeded, color: OUTCOME_COLOR['Succeeded'], label: 'Succeeded' },
       { value: b.manualReview, color: OUTCOME_COLOR['ManualReview'], label: 'Manual review' },
       { value: b.validationFailed, color: OUTCOME_COLOR['ValidationFailed'], label: 'Validation failed' },
+      { value: b.technicalError, color: OUTCOME_COLOR['TechnicalError'], label: 'Technical error' },
       { value: b.ocrFailed, color: OUTCOME_COLOR['OcrFailed'], label: 'OCR failed' },
       { value: b.inProgress, color: '#3b82f6', label: 'In OCR / validation', striped: true },
       { value: b.queued, color: '#c3cad8', label: 'Waiting' },

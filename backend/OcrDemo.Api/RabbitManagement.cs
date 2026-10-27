@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -82,11 +84,11 @@ public sealed class RabbitManagement(HttpClient http, ILogger<RabbitManagement> 
     private static List<QueueStat> ParseQueues(string json)
     {
         var found = new Dictionary<string, QueueStat>();
-        using var doc = JsonDocument.Parse(json);
+        using var doc = ReadArray(json);
         foreach (var q in doc.RootElement.EnumerateArray())
         {
-            var name = q.GetProperty("name").GetString()!;
-            if (!Known.Contains(name)) continue;
+            var name = String(q, "name");
+            if (name is null || !Known.Contains(name)) continue;
             q.TryGetProperty("message_stats", out var ms);
             found[name] = new QueueStat(
                 name,
@@ -102,9 +104,12 @@ public sealed class RabbitManagement(HttpClient http, ILogger<RabbitManagement> 
     private static Dictionary<string, int> ParseChannels(string json)
     {
         var result = new Dictionary<string, int>();
-        using var doc = JsonDocument.Parse(json);
+        using var doc = ReadArray(json);
         foreach (var c in doc.RootElement.EnumerateArray())
-            result[c.GetProperty("name").GetString()!] = Int(c, "messages_unacknowledged");
+        {
+            var name = String(c, "name");
+            if (!string.IsNullOrWhiteSpace(name)) result[name] = Int(c, "messages_unacknowledged");
+        }
         return result;
     }
 
@@ -112,12 +117,13 @@ public sealed class RabbitManagement(HttpClient http, ILogger<RabbitManagement> 
     private static Dictionary<string, string> ParseConnectionNames(string json)
     {
         var result = new Dictionary<string, string>();
-        using var doc = JsonDocument.Parse(json);
+        using var doc = ReadArray(json);
         foreach (var c in doc.RootElement.EnumerateArray())
         {
-            var address = c.GetProperty("name").GetString()!;
-            result[address] = c.TryGetProperty("client_properties", out var cp) && cp.TryGetProperty("connection_name", out var n)
-                ? n.GetString() ?? address : address;
+            var address = String(c, "name");
+            if (string.IsNullOrWhiteSpace(address)) continue;
+            var registered = c.TryGetProperty("client_properties", out var cp) ? String(cp, "connection_name") : null;
+            result[address] = string.IsNullOrWhiteSpace(registered) ? address : registered;
         }
         return result;
     }
@@ -125,26 +131,46 @@ public sealed class RabbitManagement(HttpClient http, ILogger<RabbitManagement> 
     private static List<ConsumerStat> ParseConsumers(string json, Dictionary<string, int> channelUnacked, Dictionary<string, string> names)
     {
         var result = new List<ConsumerStat>();
-        using var doc = JsonDocument.Parse(json);
+        using var doc = ReadArray(json);
         foreach (var c in doc.RootElement.EnumerateArray())
         {
-            var details = c.GetProperty("channel_details");
-            var channel = details.GetProperty("name").GetString()!;
-            var connection = details.TryGetProperty("connection_name", out var cn) ? cn.GetString() ?? channel : channel;
+            // Management metadata can be incomplete while workers connect/disconnect.
+            // A connection identity is sufficient to count a consumer even without a channel name.
+            if (c.ValueKind != JsonValueKind.Object ||
+                !c.TryGetProperty("queue", out var queue) ||
+                !c.TryGetProperty("channel_details", out var details)) continue;
+            var queueName = String(queue, "name");
+            var channel = String(details, "name");
+            var connection = String(details, "connection_name");
+            if (string.IsNullOrWhiteSpace(connection)) connection = channel;
+            if (string.IsNullOrWhiteSpace(queueName) || string.IsNullOrWhiteSpace(connection)) continue;
             result.Add(new ConsumerStat(
-                c.GetProperty("queue").GetProperty("name").GetString()!, names.GetValueOrDefault(connection, connection),
-                Int(c, "prefetch_count"), channelUnacked.GetValueOrDefault(channel)));
+                queueName, names.GetValueOrDefault(connection, connection),
+                Int(c, "prefetch_count"), channel is null ? 0 : channelUnacked.GetValueOrDefault(channel)));
         }
         return result;
     }
 
+    private static JsonDocument ReadArray(string json)
+    {
+        var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind == JsonValueKind.Array) return doc;
+        doc.Dispose();
+        throw new JsonException("Expected a RabbitMQ management array response.");
+    }
+
+    private static string? String(JsonElement e, string name) =>
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() : null;
+
     private static int Int(JsonElement e, string name) =>
-        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0;
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? n : 0;
 
     private static long Long(JsonElement e, string name) =>
-        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : 0;
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;
 
     private static double Rate(JsonElement e, string name) =>
-        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var d) && d.TryGetProperty("rate", out var r) && r.ValueKind == JsonValueKind.Number
-            ? Math.Round(r.GetDouble(), 2) : 0;
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var d) && d.ValueKind == JsonValueKind.Object &&
+        d.TryGetProperty("rate", out var r) && r.ValueKind == JsonValueKind.Number &&
+        r.TryGetDouble(out var n) && double.IsFinite(n) ? Math.Round(n, 2) : 0;
 }

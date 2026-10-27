@@ -40,6 +40,8 @@ public sealed class DashboardService(IServiceScopeFactory scopes, RabbitManageme
                 ValidationFailed = g.Count(j => j.Outcome == JobOutcome.ValidationFailed),
                 ManualReview = g.Count(j => j.Outcome == JobOutcome.ManualReview),
                 OcrFailed = g.Count(j => j.Outcome == JobOutcome.OcrFailed),
+                TechnicalError = g.Count(j => j.Outcome == JobOutcome.TechnicalError),
+                Rejected = g.Count(j => j.Outcome == JobOutcome.Rejected),
                 CreatedAt = g.Min(j => j.CreatedAt),
                 LastCompletedAt = g.Max(j => j.CompletedAt),
             })
@@ -93,8 +95,8 @@ public sealed class DashboardService(IServiceScopeFactory scopes, RabbitManageme
             batches = batches.Select(b => new
             {
                 id = b.Id, name = b.Name, b.Total, b.Queued, b.InProgress,
-                completed = b.Succeeded + b.ValidationFailed + b.ManualReview + b.OcrFailed,
-                b.Succeeded, b.ValidationFailed, b.ManualReview, b.OcrFailed, b.CreatedAt, b.LastCompletedAt,
+                completed = b.Succeeded + b.ValidationFailed + b.ManualReview + b.OcrFailed + b.TechnicalError + b.Rejected,
+                b.Succeeded, b.ValidationFailed, b.ManualReview, b.OcrFailed, b.TechnicalError, b.Rejected, b.CreatedAt, b.LastCompletedAt,
             }),
         };
     }
@@ -169,7 +171,7 @@ public static class DashboardEndpoints
                             {
                                 jobId = j.Id, j.ClientReference, j.ImageReference, j.BatchName,
                                 outcome = j.Outcome?.ToString(), j.ReasonCodes,
-                                ocr = new { outcome = j.OcrOutcome, j.Confidence, durationMs = j.OcrDurationMs, j.ModelVersion, fields = j.ExtractedFields },
+                                ocr = new { outcome = j.OcrOutcome, j.Confidence, durationMs = j.OcrDurationMs, j.ModelVersion, fields = j.ExtractedFields, details = j.OcrDetails },
                                 j.OcrWorkerId, j.BusinessWorkerId, j.CreatedAt, j.StartedAt, j.CompletedAt,
                             }, Json.Options);
                             await ctx.Response.WriteAsync($"{eventName}data: {json}\n\n", ct);

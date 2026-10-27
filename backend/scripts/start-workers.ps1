@@ -1,23 +1,33 @@
-# Starts N Python OCR workers and M .NET business workers as separate console windows.
-# Usage: ./scripts/start-workers.ps1 -OcrWorkers 3 -BusinessWorkers 2 [-OcrDelaySeconds 2]
+# Starts real OCR and business workers in the background; prints PIDs and log paths.
 param(
-    [int]$OcrWorkers = 1,
-    [int]$BusinessWorkers = 1,
-    [double]$OcrDelaySeconds = 2
+    [ValidateRange(1, 32)][int]$OcrWorkers = 1,
+    [ValidateRange(1, 32)][int]$BusinessWorkers = 1,
+    [ValidateSet("cpu", "cuda", "mps", "auto")][string]$Device = "cpu",
+    [string]$PythonExe
 )
+$ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
-$python = Join-Path $root "ocr-worker\.venv\Scripts\python.exe"
-if (-not (Test-Path $python)) { throw "Create the venv first: see README (ocr-worker setup)." }
-
-# Build once so the worker instances don't race each other on the build output.
-dotnet build (Join-Path $root "OcrDemo.BusinessWorker") --nologo -v q | Out-Null
-
+$repo = Split-Path $root -Parent
+if (-not $PythonExe) { $PythonExe = Join-Path $repo "try1\.venv\Scripts\python.exe" }
+$PythonExe = (Resolve-Path -LiteralPath $PythonExe).Path
+& $PythonExe -c "import pika, torch, PIL, ultralytics, transformers"
+if ($LASTEXITCODE -ne 0) { throw "Install dependencies first; see backend/README.md." }
+dotnet build (Join-Path $root "OcrDemo.BusinessWorker") --nologo -v q
+if ($LASTEXITCODE -ne 0) { throw "Business worker build failed." }
+$logs = Join-Path $repo ".data\logs"
+New-Item -ItemType Directory -Force -Path $logs | Out-Null
+$env:OCR_DEVICE = $Device
+$env:DOTNET_ENVIRONMENT = "Development"
+$run = Get-Date -Format "yyyyMMdd-HHmmss-fff"
 for ($i = 1; $i -le $OcrWorkers; $i++) {
-    $cmd = "`$env:OCR_PROCESSING_DELAY_SECONDS='$OcrDelaySeconds'; `$host.UI.RawUI.WindowTitle='ocr-worker-$i'; & '$python' worker.py"
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $cmd -WorkingDirectory (Join-Path $root "ocr-worker")
+    $name = "ocr-$run-$i"
+    $process = Start-Process -FilePath $PythonExe -ArgumentList "-u", "worker.py" -WorkingDirectory (Join-Path $root "ocr-worker") -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logs "$name.out.log") -RedirectStandardError (Join-Path $logs "$name.err.log")
+    Write-Host "OCR worker PID $($process.Id): $logs\$name.*.log"
 }
 for ($i = 1; $i -le $BusinessWorkers; $i++) {
-    $cmd = "`$env:DOTNET_ENVIRONMENT='Development'; `$host.UI.RawUI.WindowTitle='business-worker-$i'; dotnet run --project OcrDemo.BusinessWorker --no-build"
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $cmd -WorkingDirectory $root
+    $name = "business-$run-$i"
+    $dll = Join-Path $root "OcrDemo.BusinessWorker\bin\Debug\net10.0\OcrDemo.BusinessWorker.dll"
+    $process = Start-Process -FilePath "dotnet" -ArgumentList @("`"$dll`"") -WorkingDirectory (Join-Path $root "OcrDemo.BusinessWorker") -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logs "$name.out.log") -RedirectStandardError (Join-Path $logs "$name.err.log")
+    Write-Host "Business worker PID $($process.Id): $logs\$name.*.log"
 }
-Write-Host "Started $OcrWorkers OCR worker(s) and $BusinessWorkers business worker(s). Close the windows (or Ctrl+C) to stop them."
+Write-Host "Workers run in the background. Stop an instance with taskkill /PID <PID> /T /F. Each OCR instance loads its own model; size worker counts for available RAM/VRAM."

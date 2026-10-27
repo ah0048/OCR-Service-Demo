@@ -18,6 +18,13 @@
           @if (j.batchName) { <button class="chip slate lnk" (click)="openBatch(j.batchId)">batch {{ j.batchName }} #{{ short(j.batchId) }}</button> }
         </div>
 
+        <div class="elapsed">
+          <div><small>{{ j.status === 'Completed' ? 'Total time' : 'Elapsed time' }}</small>
+            <strong class="num" role="timer" aria-live="off">{{ clock(totalMs()) }}</strong></div>
+          <span class="chip" [class]="j.status === 'Completed' ? 'slate' : 'info pulse'">{{ j.status === 'Completed' ? 'Finished' : 'Live' }}</span>
+          <div class="elapsed-parts"><span>Queue <b class="num">{{ clock(queueMs()) }}</b></span><span>OCR <b class="num">{{ clock(ocrMs()) }}</b></span></div>
+        </div>
+
         <!-- stepper -->
         <div class="steps">
           @for (s of steps(); track s.label; let i = $index) {
@@ -57,19 +64,19 @@
                 <div class="reason"><span class="chip slate mono">{{ r }}</span><span>{{ reasonText(r) }}</span></div>
               } @empty { <span class="muted">All validation rules passed.</span> }
             </div>
-            @if (j.ocr) {
+            @if (j.ocr && j.ocr.confidence !== null) {
               <div class="confrow">
-                <span class="muted">OCR confidence</span>
+                <span class="muted">Calculated confidence</span>
                 <div class="conf"><i [style.width.%]="j.ocr.confidence * 100" [style.background]="j.ocr.confidence >= 0.8 ? '#1f9d6b' : '#e39a1b'"></i><em></em></div>
                 <b class="num">{{ (j.ocr.confidence * 100).toFixed(1) }}%</b>
               </div>
-              <small class="muted">The marker is the 80% manual-review threshold.</small>
+              <small class="muted">Calculated from field recognition and detection scores. This estimate is not a calibrated probability; scores at or above the configured threshold are accepted unless the job has an ID mismatch or OCR failure.</small>
             }
           </section>
 
           @if (j.ocr?.fields; as f) {
             <section>
-              <h4>Extracted fields <span class="chip violet">mock data</span></h4>
+              <h4>Extracted fields</h4>
               <div class="fields">
                 @for (k of keys(f); track k) { <div><small>{{ k }}</small><span class="mono">{{ f[k] }}</span></div> }
               </div>

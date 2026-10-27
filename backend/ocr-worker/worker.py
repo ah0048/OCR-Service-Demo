@@ -10,11 +10,12 @@ import signal
 import socket
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import pika
 
-from inference import MODEL_VERSION, run_ocr
+from inference import MODEL_VERSION, OcrOutput, initialize, run_ocr
 
 RABBIT_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBIT_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
@@ -74,12 +75,16 @@ def publish_started(channel, job_id, started_at):
         log.warning("Could not publish job-started event", extra={"extra_fields": {"jobId": job_id}})
 
 
-def process(channel, method, properties, body):
+def process(channel, method, properties, body, executor):
     started_at = datetime.now(timezone.utc)
     try:
         job = json.loads(body)
-        job_id = job["jobId"]
-    except (ValueError, KeyError, TypeError):
+        from uuid import UUID
+        job_id = str(UUID(job["jobId"]))
+        UUID(job["correlationId"])
+        if not isinstance(job.get("imageReference"), str):
+            raise ValueError("Missing image reference")
+    except (ValueError, KeyError, TypeError, AttributeError):
         log.error("Malformed job message, sending to DLQ")
         channel.basic_nack(method.delivery_tag, requeue=False)  # permanent: retry won't help
         return
@@ -88,12 +93,21 @@ def process(channel, method, properties, body):
     publish_started(channel, job_id, started_at)
     t0 = time.perf_counter()
     try:
-        out = run_ocr(job)
+        future = executor.submit(run_ocr, job)
+        while not future.done():
+            # Pika stays on this thread; long inference must not block heartbeats.
+            channel.connection.process_data_events(time_limit=1)
+        try:
+            out = future.result()
+        except Exception:
+            log.exception("Inference failed", extra={"extra_fields": {"jobId": job_id}})
+            out = OcrOutput("TechnicalError", details={"errorCode": "INFERENCE_ERROR"})
         result = {
             "jobId": job_id,
             "correlationId": job.get("correlationId"),
             "ocrOutcome": out.outcome,
             "extractedFields": out.fields,
+            "details": out.details,
             "confidence": out.confidence,
             "processingMs": int((time.perf_counter() - t0) * 1000),
             "startedAt": started_at.isoformat(),
@@ -101,16 +115,14 @@ def process(channel, method, properties, body):
             "workerId": WORKER_ID,
         }
         channel.basic_publish(
-            exchange="", routing_key=RESULTS_QUEUE, body=json.dumps(result),
+            exchange="", routing_key=RESULTS_QUEUE, body=json.dumps(result, ensure_ascii=False).encode('utf-8'),
             properties=pika.BasicProperties(delivery_mode=pika.DeliveryMode.Persistent,
                                             content_type="application/json",
                                             message_id=job_id, correlation_id=job.get("correlationId")),
             mandatory=True)  # confirm_delivery is on: raises if the broker doesn't confirm
     except Exception:
-        log.exception("Job failed, requeueing", extra={"extra_fields": {"jobId": job_id}})
-        time.sleep(3)  # avoid a hot redelivery loop
-        channel.basic_nack(method.delivery_tag, requeue=True)
-        return
+        log.exception("Result publication failed", extra={"extra_fields": {"jobId": job_id}})
+        raise  # Connection closes; RabbitMQ redelivers the unacked job.
 
     channel.basic_ack(method.delivery_tag)
     info("Job done", jobId=job_id, outcome=out.outcome, ms=result["processingMs"])
@@ -129,7 +141,12 @@ def main():
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, on_signal)
 
+    info("Loading offline OCR models")
+    initialize()
+    info("OCR models ready")
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr-inference")
     while not stop:
+        conn = None
         try:
             conn = connect()
             channel = conn.channel()
@@ -144,12 +161,16 @@ def main():
                     break
                 if method is None:
                     continue
-                process(channel, method, props, body)
+                process(channel, method, props, body, executor)
             channel.cancel()
             conn.close()
-        except pika.exceptions.AMQPConnectionError:
+        except (pika.exceptions.AMQPError, OSError):
             log.warning("RabbitMQ unavailable, retrying in 5s")
             time.sleep(5)
+        finally:
+            if conn is not None and conn.is_open:
+                conn.close()
+    executor.shutdown(wait=True)
     log.info("Stopped")
 
 

@@ -1,49 +1,50 @@
 @if (store.submitOpen()) {
   <div class="backdrop" (click)="close()"></div>
-  <div class="modal" role="dialog" aria-label="Submit jobs">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Submit ID cards">
     <header>
-      <h3>Submit jobs</h3>
-      <button class="x" (click)="close()" aria-label="Close">✕</button>
+      <h3>Submit ID cards</h3>
+      <button class="x" [disabled]="busy()" (click)="close()" aria-label="Close">&times;</button>
     </header>
-
     <div class="tabs">
-      <button [class.on]="mode() === 'single'" (click)="mode.set('single')">Single job</button>
-      <button [class.on]="mode() === 'batch'" (click)="mode.set('batch')">Batch</button>
+      <button [disabled]="busy()" [class.on]="mode() === 'single'" (click)="mode.set('single')">Single card</button>
+      <button [disabled]="busy()" [class.on]="mode() === 'batch'" (click)="mode.set('batch')">Batch</button>
     </div>
-
     @if (mode() === 'single') {
       <div class="form">
-        <div class="field"><label>Client reference</label>
-          <input class="input" [value]="clientRef()" (input)="clientRef.set($any($event.target).value)" /></div>
-        <div class="field"><label>Image reference</label>
-          <input class="input" [value]="imageRef()" (input)="imageRef.set($any($event.target).value)" /></div>
-        <p class="hint">No image is uploaded: this is a mock reference. The job is saved, queued, and you can follow it live.</p>
-        <button class="btn primary" [disabled]="busy() || !clientRef().trim() || !imageRef().trim()" (click)="sendSingle()">
-          {{ busy() ? 'Submitting…' : 'Submit job' }}
+        <div class="field"><label for="client-ref">Client reference</label>
+          <input id="client-ref" class="input" [disabled]="busy()" [value]="clientRef()" (input)="clientRef.set($any($event.target).value)" /></div>
+        <div class="field"><label for="front-image">Front image</label>
+          <input id="front-image" class="input" type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/tiff" [disabled]="busy()" (change)="choose($event, 'front')" /></div>
+        <div class="field"><label for="back-image">Back image</label>
+          <input id="back-image" class="input" type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/tiff" [disabled]="busy()" (change)="choose($event, 'back')" /></div>
+        <p class="hint">Upload both sides of the same card (20 MB per image). Extraction runs in the background after the upload is accepted.</p>
+        <button class="btn primary" [disabled]="busy() || !clientRef().trim() || !front() || !back()" (click)="sendSingle()">
+          {{ busy() ? 'Uploading...' : 'Upload and queue card' }}
         </button>
       </div>
     } @else {
       <div class="form">
-        <div class="field"><label>Number of jobs</label>
-          <input class="input" type="number" min="1" max="10000" [value]="count()" (input)="count.set(+$any($event.target).value)" /></div>
-        <div class="presets">
-          @for (n of [10, 100, 500, 1000, 5000]; track n) {
-            <button class="chip" [class]="count() === n ? 'info' : 'slate'" (click)="count.set(n)">{{ n.toLocaleString() }}</button>
-          }
-        </div>
-        <div class="field"><label>Batch name (client reference prefix)</label>
-          <input class="input" [value]="prefix()" (input)="prefix.set($any($event.target).value)" /></div>
-        <p class="hint">The API answers with <b>202 Accepted</b> immediately; OCR happens afterwards. Watch the progress bars on the Batches page.</p>
-        <button class="btn primary" [disabled]="busy() || count() < 1 || count() > 10000" (click)="sendBatch()">
-          {{ busy() ? 'Submitting…' : 'Submit ' + count().toLocaleString() + ' jobs' }}
+        <div class="field"><label for="batch-name">Batch name</label>
+          <input id="batch-name" class="input" [disabled]="busy()" [value]="prefix()" (input)="prefix.set($any($event.target).value)" /></div>
+        <div class="field"><label for="batch-images">Card images</label>
+          <input id="batch-images" class="input" type="file" multiple accept="image/jpeg,image/png,image/webp,image/bmp,image/tiff" [disabled]="busy()" (change)="chooseBatch($event)" /></div>
+        <p class="hint">Pair files by number: 3967452_1.jpg is front and 3967452_2.jpg is back for the same person. Up to 100 cards, 20 MB per image, 256 MB per upload.</p>
+        @if (pairError()) { <p class="hint" role="alert">{{ pairError() }}</p> }
+        @if (pairs().length) {
+          <p>{{ pairs().length }} matched cards</p>
+          <div style="max-height: 10rem; overflow: auto">
+            @for (pair of pairs(); track pair.reference) {
+              <p class="hint">{{ pair.reference }}: {{ pair.front.name }} + {{ pair.back.name }}</p>
+            }
+          </div>
+        }
+        <button class="btn primary" [disabled]="busy() || !pairs().length" (click)="sendBatch()">
+          {{ busy() ? 'Uploading...' : 'Upload and queue ' + pairs().length + ' cards' }}
         </button>
       </div>
     }
-
     @if (result(); as r) {
-      <div class="result" [class.bad]="r.bad">
-        <b>{{ r.title }}</b><span>{{ r.text }}</span>
-      </div>
+      <div class="result" [class.bad]="r.bad" role="alert"><b>{{ r.title }}</b><span>{{ r.text }}</span></div>
     }
   </div>
 }

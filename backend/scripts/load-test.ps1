@@ -1,25 +1,17 @@
-# Submits a batch of mock jobs, shows how fast the API accepts them, then polls until all are completed.
-# Usage: ./scripts/load-test.ps1 -Count 1000 [-ApiUrl http://localhost:5125]
+# Requeues a previously uploaded real image pair. Each job performs real OCR.
 param(
-    [int]$Count = 100,
+    [Parameter(Mandatory = $true)][string]$ImageReference,
+    [ValidateRange(1, 10000)][int]$Count = 10,
     [string]$ApiUrl = "http://localhost:5125"
 )
-$before = (Invoke-RestMethod "$ApiUrl/api/stats").byStatus.Completed
-if (-not $before) { $before = 0 }
-
+$jobs = @(1..$Count | ForEach-Object { @{ clientReference = "LOAD-$_"; imageReference = $ImageReference } })
 $sw = [Diagnostics.Stopwatch]::StartNew()
-$resp = Invoke-WebRequest -Method Post "$ApiUrl/api/jobs/batch" -ContentType "application/json" `
-    -Body (@{ count = $Count; clientReferencePrefix = "LOAD" } | ConvertTo-Json) -UseBasicParsing
-$submitMs = $sw.ElapsedMilliseconds
-Write-Host ("HTTP {0}: {1} jobs accepted in {2} ms (API did not wait for OCR)" -f $resp.StatusCode, $Count, $submitMs)
-
+$resp = Invoke-WebRequest -Method Post "$ApiUrl/api/jobs/batch" -ContentType "application/json" -Body (@{ jobs = $jobs; batchName = "LOAD" } | ConvertTo-Json -Depth 4) -UseBasicParsing
+$batch = $resp.Content | ConvertFrom-Json
+Write-Host "HTTP $($resp.StatusCode): $Count jobs accepted in $($sw.ElapsedMilliseconds) ms."
 $sw.Restart()
-while ($true) {
-    $s = Invoke-RestMethod "$ApiUrl/api/stats"
-    $done = [int]$s.byStatus.Completed - $before
-    Write-Host ("  completed {0}/{1}  queued {2}  ({3:n0}s)" -f $done, $Count, [int]$s.byStatus.Queued, $sw.Elapsed.TotalSeconds)
-    if ($done -ge $Count) { break }
-    Start-Sleep 3
-}
-Write-Host ("All {0} jobs completed in {1:n1}s = {2:n1} jobs/s" -f $Count, $sw.Elapsed.TotalSeconds, ($Count / $sw.Elapsed.TotalSeconds))
-$s.byOutcome | ConvertTo-Json -Compress
+do {
+    $page = Invoke-RestMethod "$ApiUrl/api/jobs?batchId=$($batch.batchId)&status=Completed&pageSize=1"
+    Write-Host "Completed $($page.total)/$Count in $([int]$sw.Elapsed.TotalSeconds)s"
+    if ($page.total -lt $Count) { Start-Sleep 3 }
+} while ($page.total -lt $Count)

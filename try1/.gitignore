@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv*/
+outputs/
+*.log
+# Model/package assets already tracked by the CPU commit remain tracked.
+# Keep newly downloaded offline packages out of ordinary Git.
+wheels_cuda/
+
+*.pt
+*.safetensors
+*.whl
+core/ocr_old/bundle/
+core/digits/files/arabic_digit_ai/dataset/

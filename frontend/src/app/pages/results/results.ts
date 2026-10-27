@@ -18,7 +18,7 @@ export class Results {
   private feed = new ResultsFeed(inject(ResultsStore), this.dashboard);
 
   protected results = this.feed.store;
-  protected outcomes = Object.keys(OUTCOME_LABEL).filter(o => o !== 'TechnicalError');
+  protected outcomes = Object.keys(OUTCOME_LABEL);
   protected label = OUTCOME_LABEL;
   protected chip = OUTCOME_CHIP;
   protected color = OUTCOME_COLOR;
@@ -48,6 +48,7 @@ export class Results {
       ocrOutcome: r.ocr.outcome,
       confidence: r.ocr.confidence,
       extractedFields: r.ocr.fields,
+      details: r.ocr.details,
       processingMs: r.ocr.durationMs,
       modelVersion: r.ocr.modelVersion,
     };

@@ -2,13 +2,14 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using System.Text.Json;
 
 namespace OcrDemo.Shared;
 
 /// <summary>Queued: saved and published. OcrInProgress: an OCR worker picked it up. Completed: business processing done.</summary>
 public enum JobStatus { Queued, OcrInProgress, Completed }
 
-public enum JobOutcome { Succeeded, ValidationFailed, ManualReview, OcrFailed, TechnicalError }
+public enum JobOutcome { Succeeded, ValidationFailed, ManualReview, OcrFailed, TechnicalError, Rejected }
 
 public class Job
 {
@@ -22,6 +23,7 @@ public class Job
     public JobOutcome? Outcome { get; set; }
     public List<string> ReasonCodes { get; set; } = [];
     public Dictionary<string, string>? ExtractedFields { get; set; }
+    public JsonDocument? OcrDetails { get; set; }
     public double? Confidence { get; set; }
     public string? OcrOutcome { get; set; }
     public int? OcrDurationMs { get; set; }
@@ -48,6 +50,7 @@ public class OcrDbContext(DbContextOptions<OcrDbContext> options) : DbContext(op
             e.Property(j => j.Outcome).HasConversion<string>().HasMaxLength(32);
             e.Property(j => j.ReasonCodes).HasColumnType("jsonb");
             e.Property(j => j.ExtractedFields).HasColumnType("jsonb");
+            e.Property(j => j.OcrDetails).HasColumnType("jsonb");
             e.HasIndex(j => j.Status);
             e.HasIndex(j => j.BatchId);
             e.HasIndex(j => j.CreatedAt);

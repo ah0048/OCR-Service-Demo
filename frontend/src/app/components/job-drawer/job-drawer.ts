@@ -8,7 +8,11 @@ import { Seg, SegBar } from '../seg-bar/seg-bar';
 import { StateChip } from '../state-chip/state-chip';
 
 const REASONS: Record<string, string> = {
+  FRONT_BACK_ID_MISMATCH: 'The national IDs on the front and back do not match. This card was rejected and further OCR was stopped.',
   OCR_UNREADABLE: 'The OCR engine could not read the image.',
+  OCR_REVIEW_REQUIRED: 'The OCR model requires a person to review these fields.',
+  OCR_TECHNICAL_ERROR: 'Extraction failed due to a technical error. Inspect the OCR worker logs.',
+  OCR_CONFIDENCE_UNAVAILABLE: 'No valid overall confidence score is available, so a person should review it.',
   LOW_CONFIDENCE: 'OCR confidence is below the 80% threshold, so a person should review it.',
   NAME_MISSING: 'The full name was not extracted.',
   BIRTHDATE_INVALID: 'The birth date is missing, malformed or in the future.',
@@ -37,15 +41,22 @@ export class JobDrawer {
   protected dur = duration;
   private seq = 0;
 
-  private now = computed(() => { this.store.tick(); return Date.now(); });
+  private now = signal(Date.now());
 
   constructor() {
+    // Independent clock: elapsed time keeps updating even if dashboard SSE stalls.
+    effect(onCleanup => {
+      if (!this.store.selectedJobId()) return;
+      this.now.set(Date.now());
+      const timer = setInterval(() => this.now.set(Date.now()), 1000);
+      onCleanup(() => clearInterval(timer));
+    });
     // load on open; keep refreshing on every live tick until the job completes
     effect(() => {
       const id = this.store.selectedJobId();
       this.store.tick();
       untracked(() => {
-        if (!id) { this.job.set(null); this.missing.set(false); return; }
+        if (!id) { ++this.seq; this.job.set(null); this.missing.set(false); return; }
         if (this.job()?.jobId !== id) { this.job.set(null); this.missing.set(false); }
         else if (this.job()?.status === 'Completed') return;
         const seq = ++this.seq;
@@ -64,7 +75,28 @@ export class JobDrawer {
   protected raw = computed(() => JSON.stringify(this.job(), null, 2));
   protected time = (iso: string | null) => (iso ? new Date(utc(iso)).toLocaleTimeString([], { hour12: false }) + '.' + String(new Date(utc(iso)).getMilliseconds()).padStart(3, '0') : '—');
 
-  protected totalMs = computed(() => between(this.job()?.createdAt, this.job()?.completedAt) ?? 0);
+  protected totalMs = computed(() => {
+    const j = this.job();
+    if (!j) return 0;
+    return Math.max(0, (j.completedAt ? new Date(utc(j.completedAt)).getTime() : this.now()) - new Date(utc(j.createdAt)).getTime());
+  });
+  protected queueMs = computed(() => {
+    const j = this.job();
+    if (!j) return 0;
+    const end = j.startedAt ?? j.completedAt;
+    return Math.max(0, (end ? new Date(utc(end)).getTime() : this.now()) - new Date(utc(j.createdAt)).getTime());
+  });
+  protected ocrMs = computed(() => {
+    const j = this.job();
+    if (!j?.startedAt) return 0;
+    if (j.status === 'Completed') return j.ocr?.durationMs ?? between(j.startedAt, j.completedAt) ?? 0;
+    return Math.max(0, this.now() - new Date(utc(j.startedAt)).getTime());
+  });
+  protected clock(ms: number): string {
+    const seconds = Math.floor(Math.max(0, ms) / 1000);
+    const h = Math.floor(seconds / 3600), m = Math.floor(seconds / 60) % 60, s = seconds % 60;
+    return (h ? String(h).padStart(2, '0') + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  }
 
   protected steps = computed(() => {
     const j = this.job();

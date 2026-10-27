@@ -1,0 +1,10 @@
+accelerate==1.14.0
+numpy==2.3.5
+opencv-python-headless==4.14.0.94
+pillow==12.2.0
+qwen-vl-utils==0.0.14
+safetensors==0.8.0
+torch==2.13.0
+torchvision==0.28.0
+transformers==5.16.1
+ultralytics==8.4.135

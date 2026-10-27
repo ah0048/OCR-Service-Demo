@@ -22,14 +22,15 @@ public record OcrJobMessage(Guid JobId, Guid CorrelationId, string ClientReferen
 /// <summary>Sent Python OCR worker -> business worker when it picks a job up (best effort).</summary>
 public record JobStartedMessage(Guid JobId, string WorkerId, DateTimeOffset StartedAt);
 
-/// <summary>Sent Python OCR worker -> business worker. Outcome: Success | Unreadable | LowConfidence.</summary>
+/// <summary>Sent Python OCR worker -> business worker. Outcome: Success | Unreadable | LowConfidence | Rejected | TechnicalError.</summary>
 public record OcrResultMessage(
     Guid JobId,
     Guid CorrelationId,
     string OcrOutcome,
     Dictionary<string, string>? ExtractedFields,
-    double Confidence,
+    double? Confidence,
     int ProcessingMs,
     DateTimeOffset StartedAt,
     string ModelVersion,
-    string? WorkerId);
+    string? WorkerId,
+    JsonDocument? Details = null);

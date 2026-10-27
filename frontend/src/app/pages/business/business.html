@@ -2,7 +2,6 @@
   <div class="page-head">
     <div>
       <h1>Extracted ID data <span class="audience">business view</span></h1>
-      <p>Each ID appears here as soon as it has been read, with the data the system found.</p>
     </div>
     <div class="ctl">
       <span class="chip" [class]="feed.paused() ? 'slate' : feed.store.connected() ? 'ok pulse' : 'bad'">
@@ -14,57 +13,53 @@
   </div>
 
   @if (feed.paused() && feed.newWhilePaused() > 0) {
-    <button class="newbar" (click)="feed.togglePause()">▲ {{ feed.newWhilePaused() }} new ID{{ feed.newWhilePaused() === 1 ? '' : 's' }}. Click to resume</button>
+    <button class="newbar" (click)="feed.togglePause()">{{ feed.newWhilePaused() }} new IDs. Click to resume</button>
   }
 
   <div class="rows">
     @for (r of feed.visible(); track r.jobId) {
       <div class="slot" [class.fresh]="feed.isFresh(r)">
         <div class="clip">
-          <article class="row card">
-            <div class="pair">
-              <app-image-placeholder side="front" [accent]="color[r.outcome]" [alt]="'ID ' + r.jobId" />
-              <app-image-placeholder side="back" [accent]="color[r.outcome]" [alt]="'ID ' + r.jobId" />
-            </div>
-
-            <div class="data">
-              <div class="head">
-                <div class="jobid">
-                  <small>Job ID</small>
-                  <span class="mono">{{ r.jobId }}</span>
-                  <button class="mini" (click)="copy(r.jobId, 'Job id')">copy</button>
-                </div>
-                <div class="metric">
-                  <small>Confidence</small>
-                  <div class="conf">
-                    <span class="bar-track"><i [style.width.%]="r.ocr.confidence * 100" [style.background]="confColor(r.ocr.confidence)"></i></span>
-                    <b class="num">{{ (r.ocr.confidence * 100).toFixed(1) }}%</b>
-                  </div>
-                </div>
-                <div class="metric">
-                  <small>OCR time</small>
-                  <b class="num">{{ dur(r.ocr.durationMs) }}</b>
-                </div>
+          <article class="row card" aria-label="ID card review">
+            <header class="review-head">
+              <div class="jobid">
+                <b>{{ r.clientReference }}</b>
+                <span class="mono" [title]="r.jobId">{{ r.jobId.slice(0, 8) }}</span>
+                <button class="mini" (click)="copy(r.jobId, 'Job id')" aria-label="Copy job ID">Copy ID</button>
               </div>
+              <span class="chip" [class]="outcomeChip[r.outcome]">{{ outcomeLabel[r.outcome] }}</span>
+              <div class="metric"><small>Confidence</small>
+                <b class="num" [style.color]="confColor(r.ocr.confidence ?? 0)">{{ r.ocr.confidence === null ? 'Unavailable' : (r.ocr.confidence * 100).toFixed(1) + '%' }}</b>
+              </div>
+              <div class="metric"><small>OCR time</small><b class="num">{{ dur(r.ocr.durationMs) }}</b></div>
+            </header>
 
-              @if (fields(r); as list) {
-                <ul class="fields">
-                  @for (f of list; track f.key) {
-                    <li>
-                      <small>{{ f.label }}</small>
-                      <b class="num" [class.id]="f.key === 'nationalId'">{{ f.value }}</b>
-                    </li>
-                  }
-                </ul>
-              } @else {
-                <div class="nodata">No data could be read from this ID.</div>
+            <div class="review-grid" #reviewGrid [style.--scan-width]="scanWidth(r)">
+              @for (side of sides; track side.key) {
+                <figure class="card-image">
+                  <figcaption>{{ side.label }} image</figcaption>
+                  <app-image-placeholder [jobId]="r.jobId" [imageReference]="r.imageReference" [side]="side.key" fit="fill" [frameHeight]="scanHeight(r, side.key)" (dimensions)="imageLoaded(r.jobId, side.key, $event)" [showSideLabel]="false" [accent]="color[r.outcome]" [alt]="side.label + ' of ID card'" />
+                </figure>
+                <section class="data-panel" [class.back]="side.key === 'back'" [attr.aria-label]="side.label + ' extracted fields'">
+                  <h2>{{ side.label }} extracted fields</h2>
+                  <dl class="fields">
+                    @for (f of sideFields(r, side.key); track f.key) {
+                      <div [class.wide]="f.wide">
+                        <dt>{{ f.label }}</dt>
+                        <dd [class.id]="f.id" [class.not-read]="!f.value"><bdi [attr.dir]="f.id ? 'ltr' : 'auto'">{{ f.value || 'Not extracted' }}</bdi></dd>
+                      </div>
+                    } @empty {
+                      <div class="nodata wide">No fields could be read from this side.</div>
+                    }
+                  </dl>
+                </section>
               }
             </div>
           </article>
         </div>
       </div>
     } @empty {
-      <div class="card empty">Waiting for IDs… Submit jobs from the top bar and each one will appear here as soon as it has been read.</div>
+      <div class="card empty">Waiting for IDs. Submit a card to see its images and extracted fields here.</div>
     }
   </div>
 
