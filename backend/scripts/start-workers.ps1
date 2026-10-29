@@ -1,6 +1,6 @@
 # Starts real OCR and business workers in the background; prints PIDs and log paths.
 param(
-    [ValidateRange(1, 32)][int]$OcrWorkers = 1,
+    [ValidateRange(0, 32)][int]$OcrWorkers = 1,
     [ValidateRange(1, 32)][int]$BusinessWorkers = 1,
     [ValidateSet("cpu", "cuda", "mps", "auto")][string]$Device = "cpu",
     [string]$PythonExe
@@ -8,10 +8,12 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $repo = Split-Path $root -Parent
-if (-not $PythonExe) { $PythonExe = Join-Path $repo "try1\.venv\Scripts\python.exe" }
-$PythonExe = (Resolve-Path -LiteralPath $PythonExe).Path
-& $PythonExe -c "import pika, torch, PIL, ultralytics, transformers"
-if ($LASTEXITCODE -ne 0) { throw "Install dependencies first; see backend/README.md." }
+if ($OcrWorkers -gt 0) {
+    if (-not $PythonExe) { $PythonExe = Join-Path $repo "try1\.venv\Scripts\python.exe" }
+    $PythonExe = (Resolve-Path -LiteralPath $PythonExe).Path
+    & $PythonExe -c "import pika, torch, PIL, ultralytics, transformers"
+    if ($LASTEXITCODE -ne 0) { throw "Install dependencies first; see backend/README.md." }
+}
 dotnet build (Join-Path $root "OcrDemo.BusinessWorker") --nologo -v q
 if ($LASTEXITCODE -ne 0) { throw "Business worker build failed." }
 $logs = Join-Path $repo ".data\logs"

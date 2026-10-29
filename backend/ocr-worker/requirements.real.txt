@@ -1,2 +1,3 @@
 -r requirements.txt
 -r ../../try1/requirements.production.txt
+pi-heif==1.4.0; sys_platform == "darwin"

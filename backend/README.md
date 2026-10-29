@@ -81,6 +81,135 @@ To run a business worker manually, set `DOTNET_ENVIRONMENT=Development` and run 
 
 The launcher prints process IDs and log locations under `.data/logs`. Stop a background instance with `taskkill /PID <PID> /T /F`. An interrupted unacknowledged job is redelivered. Each OCR instance loads a separate copy of the models: start with one, measure memory and throughput, and increase counts to fit RAM/VRAM. More processes on a saturated CPU/GPU can reduce throughput.
 
+## Run OCR on a Mac through SSH (Windows hosts the other services)
+
+Windows keeps Angular, the .NET API/business workers, PostgreSQL and RabbitMQ.
+The Mac runs one Python OCR worker by default in `backend/ocr-worker/.venv` using `mps`.
+Each process loads its own model copy and consumes one job at a time from the
+same `ocr-jobs` queue. RabbitMQ distributes jobs among available workers; no extra
+tunnel or port is required. Three workers can process three different cards at
+once, but share the Mac's GPU and memory and do not guarantee three times the throughput.
+Original uploaded images remain on Windows. PostgreSQL stores job/image references
+and OCR results, not image bytes. RabbitMQ carries job references and result JSON.
+The Mac downloads front/back images from the existing API endpoints by job ID,
+validates them, processes them and removes its temporary files after each job.
+
+The provisioned Mac project is `/Users/entapp/ocr-service-demo-for-mac/ocr_demo`
+on `entapp@192.168.171.19`. No Docker, .NET, Node, Homebrew, sudo or system service
+installation is required on the Mac. The Python environment uses an existing base
+interpreter at `/Users/entapp/the-eye-env/eye-env`; keep that base installation.
+The service does not use `Id_OCR/Id_OCR_env` packages or `.data/python-deps`.
+
+From a Windows terminal at the repository root, start the Windows components
+without local OCR processes:
+
+```cmd
+start.cmd -OcrWorkers 0 -BusinessWorkers 2
+```
+
+The launcher does not stop older workers or business processes. If the Windows
+components are already running, do not start another copy. Stop existing local
+OCR consumers before switching to the Mac, preferably while the queue is idle.
+
+Start/reuse the background SSH tunnel, start/reuse the Mac worker, and follow its log:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File backend/scripts/connect-mac-worker.ps1
+```
+
+Override the Mac pool size with `-OcrWorkers 2`, `-OcrWorkers 3`, etc. (range 1–32; default 1):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File backend/scripts/connect-mac-worker.ps1 -OcrWorkers 2
+```
+
+The Windows launcher still uses `start.cmd -OcrWorkers 0`; this parameter controls
+the Mac pool only on `connect-mac-worker.ps1`.
+
+The SSH password is requested for worker management/log viewing, but is not stored.
+Closing log viewing does not stop either the background tunnel or Mac worker.
+The tunnel maps Mac `127.0.0.1:15673` to Windows `127.0.0.1:5672` (RabbitMQ),
+and Mac `127.0.0.1:15125` to Windows `127.0.0.1:5125` (API). PostgreSQL is not
+forwarded. Both remote listeners bind only to loopback.
+
+The provisioned forwarding key is Windows `.data/mac-ssh/tunnel_ed25519_user`,
+with permissions limited to the Windows user, administrators and SYSTEM. Its public
+key is recorded in Mac `~/.ssh/authorized_keys` with a forced failing command,
+PTY/agent/X11 forwarding disabled, remote forwarding limited to the two ports,
+and local forwarding limited to unused Mac loopback port 1. It cannot run a shell.
+The key and tunnel PID/logs are ignored by Git. A new Windows checkout/machine
+needs its own key provisioning; do not commit or share the private key.
+To revoke this access, remove only the `ocr-mac-forwarding-only` entry from
+`authorized_keys` and stop the tunnel.
+
+To manage the worker from a normal Mac SSH shell:
+
+```bash
+cd ~/ocr-service-demo-for-mac/ocr_demo
+bash backend/scripts/mac-worker.sh status
+bash backend/scripts/mac-worker.sh stop
+bash backend/scripts/mac-worker.sh start
+bash backend/scripts/mac-worker.sh start 2
+bash backend/scripts/mac-worker.sh logs
+```
+
+`start` defaults to 1 (or `OCR_WORKERS` when set in the Mac shell). It reuses
+existing numbered workers, starts missing slots, and gracefully stops slots above
+the requested count. Repeated starts do not add duplicate processes. Startup is
+staggered; check each log for `OCR models ready` and `Connected, waiting for jobs`.
+`status` counts live processes; readiness is established by their logs/broker consumers.
+`stop` asks all managed workers to finish their current jobs and exit. Check `status`
+before restarting. A lock prevents concurrent start/stop commands. A legacy
+single worker must be stopped before starting the numbered pool.
+
+Each worker uses `nohup`, validates its PID against the actual worker command,
+and writes `.data/logs/mac-ocr-1.log` / `mac-ocr-1.pid`, then `-2`, `-3`, etc.
+The `logs` command follows all existing numbered log files. Pools do not
+automatically start at Mac reboot. Ultralytics automatic dependency
+installation is disabled in this launcher; macOS requirements include `pi-heif`.
+
+The current M4 has 16 GB unified memory. Multiple full model copies can create
+memory pressure and swap activity. Watch memory/throughput under real load and
+use `start 1` or `start 2` if three workers are slower or unstable. Increasing the
+accepted count to 32 does not mean this hardware can support 32 OCR processes.
+
+Validation on 2026-10-27: all three Mac workers completed a three-card batch
+successfully, with 12 extracted fields per card. Processing took approximately
+15, 85 and 89 seconds; the batch finished in 90 seconds. Swap use was around
+14–16 GB. Earlier single-worker tests took 8–11 seconds per card, so this
+three-worker trial did not demonstrate a throughput improvement on the 16 GB Mac.
+The default is now one. A subsequent seven-card test took 58.3 seconds with one
+worker and 3 minutes 17 seconds with three. Explicitly select more workers only
+when measuring a benefit on the available hardware.
+
+To restart just the Windows tunnel, or stop it after draining active jobs:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File backend/scripts/start-mac-tunnel.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File backend/scripts/start-mac-tunnel.ps1 -Stop
+```
+
+Windows, Docker infrastructure, API, business workers and the tunnel must remain
+running while OCR jobs are submitted. The worker retries broker connections; the
+tunnel must be restarted after a Windows reboot or an SSH connection failure.
+If image downloads fail transiently, each image gets three attempts with a
+30-second socket timeout. Exhausted downloads finish as `TechnicalError` with
+`IMAGE_DOWNLOAD_FAILED`; missing/invalid/oversized images finish as `OcrFailed`.
+Downloads are limited to 20 MiB each, bypass system proxies and reject redirects.
+
+Configuration for other remote setups: set `OCR_IMAGE_API_URL` to an HTTP(S) API
+base URL, `RABBITMQ_HOST/PORT/USER/PASSWORD` as needed, and `OCR_DEVICE=mps`.
+If `OCR_IMAGE_API_URL` is unset, direct worker invocation retains the original
+local/shared-filesystem behavior. The Mac launcher sets the tunnel defaults.
+On MPS, front/back detection is serialized to avoid the concurrent Metal shader
+cache failure observed with PyTorch 2.13; CPU/CUDA detection stays parallel.
+
+Run worker regression checks with either platform's environment:
+
+```bash
+backend/ocr-worker/.venv/bin/python -m unittest discover -s backend/ocr-worker -p 'test_*.py'
+```
+
 ## Images and submission contracts
 
 The default shared image store is `<repo>/.data/images/<opaque-reference>/front` and `back`. The API accepts JPEG, PNG, WEBP, BMP or TIFF signatures, up to 20 MB per image, 100 cards and 256 MB per upload. The worker performs full image validation (including pixel/frame limits). Corrupt images become final `OcrFailed` results rather than endless retries. Batch images are matched **by numeric filename prefix**, independently of upload order. Duplicate sides, missing partners, nonnumeric prefixes and incorrect side fields are rejected. The numeric prefix becomes the client reference; single uploads still take an explicit clientReference.

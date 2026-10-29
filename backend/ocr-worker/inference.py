@@ -4,15 +4,85 @@ import os
 import sys
 import tempfile
 import warnings
+import time
+from http.client import HTTPException
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
+from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_ROOT = Path(os.getenv('OCR_PROJECT_ROOT', str(ROOT / 'try1'))).resolve()
 IMAGE_ROOT = Path(os.getenv('OCR_IMAGE_ROOT', str(ROOT / '.data/images'))).resolve()
 MODEL_VERSION = os.getenv('OCR_MODEL_VERSION', 'egyptian-id-try1-v1')
 DEVICE = os.getenv('OCR_DEVICE', 'cpu')
+IMAGE_API_URL = os.getenv('OCR_IMAGE_API_URL', '').rstrip('/')
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+
+class ImageDownloadError(Exception):
+    """The image API could not be reached after bounded retries."""
+
+
+class NoImageRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def validate_image_api_url():
+    if not IMAGE_API_URL:
+        return
+    url = urlsplit(IMAGE_API_URL)
+    if (url.scheme not in ('http', 'https') or not url.hostname or
+            url.username is not None or url.password is not None or url.query or url.fragment):
+        raise ValueError('OCR_IMAGE_API_URL must be an HTTP(S) base URL without credentials, query or fragment')
+
+
+def download_image_pair(job, directory):
+    """Fetch only fixed job-image routes; never trust a URL or path in a message."""
+    validate_image_api_url()
+    job_id = str(UUID(job['jobId']))
+    directory.mkdir(parents=True)
+    # Loopback SSH forwards must bypass any corporate/system HTTP proxy.
+    opener = build_opener(ProxyHandler({}), NoImageRedirects())
+    for side in ('front', 'back'):
+        path = directory / side
+        for attempt in range(3):
+            try:
+                with opener.open(f'{IMAGE_API_URL}/api/jobs/{job_id}/images/{side}', timeout=30) as response:
+                    length = response.headers.get('Content-Length')
+                    if length is not None and int(length) > MAX_IMAGE_BYTES:
+                        raise ValueError('Image exceeds 20 MB')
+                    total = 0
+                    with path.open('wb') as output:
+                        while chunk := response.read(64 * 1024):
+                            total += len(chunk)
+                            if total > MAX_IMAGE_BYTES:
+                                raise ValueError('Image exceeds 20 MB')
+                            output.write(chunk)
+                    if not total:
+                        raise ValueError('Image is empty')
+                    if length is not None and total != int(length):
+                        raise URLError('Incomplete image response')
+                break
+            except HTTPError as exc:
+                status = exc.code
+                exc.close()
+                if status in (404, 410):
+                    raise ValueError('Job images are unavailable') from None
+                if status not in (408, 429) and status < 500:
+                    raise ImageDownloadError('Image API rejected the download') from None
+                if attempt == 2:
+                    raise ImageDownloadError('Image API unavailable after three attempts') from None
+            except (OSError, HTTPException):
+                if attempt == 2:
+                    raise ImageDownloadError('Image API unavailable after three attempts') from None
+            if attempt < 2:
+                time.sleep(attempt + 1)
+    return directory / 'front', directory / 'back'
 
 
 @dataclass
@@ -25,6 +95,7 @@ class OcrOutput:
 
 def initialize():
     """Fail before consuming if assets/device are unavailable; cache models per process."""
+    validate_image_api_url()
     sys.path.insert(0, str(MODEL_ROOT))
     from project_config import DETECTOR_MODEL, BACK_DETECTOR_MODEL, FIELD_CLASSIFIER_MODELS
     from pipeline.front_id import load_detector, load_qari, load_extractor
@@ -61,7 +132,7 @@ def image_pair(reference):
 
 def validate_image(path):
     from PIL import Image
-    if path.stat().st_size > 20 * 1024 * 1024:
+    if path.stat().st_size > MAX_IMAGE_BYTES:
         raise ValueError('Image exceeds 20 MB')
     with warnings.catch_warnings():
         warnings.simplefilter('error', Image.DecompressionBombWarning)
@@ -179,14 +250,17 @@ def map_report(report):
 
 def run_ocr(job):
     from PIL import UnidentifiedImageError, Image
-    try:
-        front, back = image_pair(job.get('imageReference'))
-        validate_image(front)
-        validate_image(back)
-    except (ValueError, OSError, UnidentifiedImageError, Image.DecompressionBombError,
-            Image.DecompressionBombWarning):
-        return OcrOutput('Unreadable', 0.0, details={'errorCode': 'INVALID_IMAGE_PAIR'})
-    from pipeline.document import run_document
     with tempfile.TemporaryDirectory(prefix='ocr-') as output:
+        try:
+            front, back = (download_image_pair(job, Path(output) / 'images') if IMAGE_API_URL
+                           else image_pair(job.get('imageReference')))
+            validate_image(front)
+            validate_image(back)
+        except ImageDownloadError:
+            return OcrOutput('TechnicalError', details={'errorCode': 'IMAGE_DOWNLOAD_FAILED'})
+        except (ValueError, OSError, UnidentifiedImageError, Image.DecompressionBombError,
+                Image.DecompressionBombWarning):
+            return OcrOutput('Unreadable', 0.0, details={'errorCode': 'INVALID_IMAGE_PAIR'})
+        from pipeline.document import run_document
         _, report = run_document(front, back, output=output, device=DEVICE, qari_device=DEVICE)
         return map_report(report)

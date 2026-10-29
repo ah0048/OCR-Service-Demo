@@ -147,7 +147,10 @@ def run_document(front, back, output=PIPELINE_OUTPUT, qari=True,
             source, output=directory / side, qari=False, device=device,
             qari_device=qari_device, **options)
 
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix='id-side') as pool:
+    # PyTorch 2.13 MPS can race while two detectors initialize Metal shader
+    # caches concurrently. Keep front/back detection serial on that backend.
+    parallel_detection = device != 'mps'
+    with ThreadPoolExecutor(max_workers=2 if parallel_detection else 1, thread_name_prefix='id-side') as pool:
         futures = {pool.submit(detect_side, side, source): side
                    for side, source in (('front', front), ('back', back))}
         for future in as_completed(futures):
@@ -172,7 +175,7 @@ def run_document(front, back, output=PIPELINE_OUTPUT, qari=True,
         reason = ('Both sides must independently extract the same 14-digit ID '
                   'before the remaining fields are processed')
         report['pipeline'] = {'stage': 'id_validation', 'continued': False,
-                              'parallel_detection': True, 'reason': reason}
+                              'parallel_detection': parallel_detection, 'reason': reason}
         for side in report['sides'].values():
             for name, entry in (side.get('fields') or {}).items():
                 if name != 'id' and isinstance(entry, dict):
@@ -184,7 +187,7 @@ def run_document(front, back, output=PIPELINE_OUTPUT, qari=True,
         return result_path, report
 
     report['pipeline'] = {'stage': 'field_processing', 'continued': True,
-                          'parallel_detection': True, 'parallel_fields': True,
+                          'parallel_detection': parallel_detection, 'parallel_fields': True,
                           'id': report['national_id']['text']}
 
     def process_back_fields():

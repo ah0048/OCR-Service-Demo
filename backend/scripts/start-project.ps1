@@ -1,7 +1,7 @@
 # Invoked by start.cmd from any working directory.
 [CmdletBinding()]
 param(
-    [ValidateRange(1, 32)][int]$OcrWorkers = 3,
+    [ValidateRange(0, 32)][int]$OcrWorkers = 3,
     [ValidateRange(1, 32)][int]$BusinessWorkers = 2,
     [ValidateSet("cpu", "cuda", "mps", "auto")][string]$Device = "cpu",
     [string]$PythonExe
@@ -46,34 +46,38 @@ try {
             throw "Missing prerequisite: $command. Install Docker Desktop, .NET 10 SDK and Node.js/npm before running start.cmd."
         }
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $repo "try1\pipeline\document.py"))) {
+    if ($OcrWorkers -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $repo "try1\pipeline\document.py"))) {
         throw "The real OCR project is missing. Place it, including its offline model assets, in try1."
     }
 
     Write-Host "[1/5] Preparing Python dependencies..."
-    if (-not $PythonExe) {
-        $PythonExe = Join-Path $repo "try1\.venv\Scripts\python.exe"
-        if (-not (Test-Path -LiteralPath $PythonExe)) {
-            $PythonExe = Join-Path $repo "backend\ocr-worker\.venv\Scripts\python.exe"
+    if ($OcrWorkers -gt 0) {
+        if (-not $PythonExe) {
+            $PythonExe = Join-Path $repo "try1\.venv\Scripts\python.exe"
             if (-not (Test-Path -LiteralPath $PythonExe)) {
-                $venv = Join-Path $repo "backend\ocr-worker\.venv"
-                if (Get-Command py -ErrorAction SilentlyContinue) {
-                    Invoke-Checked "py" @("-3", "-m", "venv", $venv)
-                } elseif (Get-Command python -ErrorAction SilentlyContinue) {
-                    Invoke-Checked "python" @("-m", "venv", $venv)
-                } else { throw "Install Python 3.11+ or pass -PythonExe with an existing OCR environment." }
+                $PythonExe = Join-Path $repo "backend\ocr-worker\.venv\Scripts\python.exe"
+                if (-not (Test-Path -LiteralPath $PythonExe)) {
+                    $venv = Join-Path $repo "backend\ocr-worker\.venv"
+                    if (Get-Command py -ErrorAction SilentlyContinue) {
+                        Invoke-Checked "py" @("-3", "-m", "venv", $venv)
+                    } elseif (Get-Command python -ErrorAction SilentlyContinue) {
+                        Invoke-Checked "python" @("-m", "venv", $venv)
+                    } else { throw "Install Python 3.11+ or pass -PythonExe with an existing OCR environment." }
+                }
             }
         }
-    }
-    $PythonExe = (Resolve-Path -LiteralPath $PythonExe).Path
-    & $PythonExe -c "import importlib.util, sys; sys.exit(0 if all(importlib.util.find_spec(n) for n in ('torch', 'torchvision', 'PIL', 'ultralytics', 'transformers', 'accelerate', 'cv2', 'numpy', 'safetensors', 'qwen_vl_utils')) else 1)"
-    if ($LASTEXITCODE -ne 0) {
-        Invoke-Checked $PythonExe @("-m", "pip", "install", "-r", (Join-Path $repo "backend\ocr-worker\requirements.real.txt"))
-    } else {
-        & $PythonExe -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pika') else 1)"
+        $PythonExe = (Resolve-Path -LiteralPath $PythonExe).Path
+        & $PythonExe -c "import importlib.util, sys; sys.exit(0 if all(importlib.util.find_spec(n) for n in ('torch', 'torchvision', 'PIL', 'ultralytics', 'transformers', 'accelerate', 'cv2', 'numpy', 'safetensors', 'qwen_vl_utils')) else 1)"
         if ($LASTEXITCODE -ne 0) {
-            Invoke-Checked $PythonExe @("-m", "pip", "install", "-r", (Join-Path $repo "backend\ocr-worker\requirements.txt"))
+            Invoke-Checked $PythonExe @("-m", "pip", "install", "-r", (Join-Path $repo "backend\ocr-worker\requirements.real.txt"))
+        } else {
+            & $PythonExe -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pika') else 1)"
+            if ($LASTEXITCODE -ne 0) {
+                Invoke-Checked $PythonExe @("-m", "pip", "install", "-r", (Join-Path $repo "backend\ocr-worker\requirements.txt"))
+            }
         }
+    } else {
+        Write-Host "Local OCR disabled; Python dependencies are provided by the remote worker."
     }
 
     Write-Host "[2/5] Preparing frontend dependencies..."

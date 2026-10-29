@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import pika
 
-from inference import MODEL_VERSION, OcrOutput, initialize, run_ocr
+from inference import IMAGE_API_URL, MODEL_VERSION, OcrOutput, initialize, run_ocr
 
 RABBIT_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBIT_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
@@ -143,7 +143,8 @@ def main():
 
     info("Loading offline OCR models")
     initialize()
-    info("OCR models ready")
+    info("OCR models ready", imageSource="api" if IMAGE_API_URL else "filesystem",
+         device=os.getenv("OCR_DEVICE", "cpu"))
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr-inference")
     while not stop:
         conn = None
