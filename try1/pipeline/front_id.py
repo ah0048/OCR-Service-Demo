@@ -52,29 +52,20 @@ load_qari.cache_info = _qari_reader.cache_info
 
 
 def apply_text_ocr(fields, reader, text_fields=None):
-    """OCR the text fields, one concurrent pass over all of their crops.
+    """Read text candidates together; the reader controls actual batch size.
 
-    The highest-confidence candidate of every field goes out in a single batch, so
-    the fields are recognised at the same time rather than one after another -
-    this is where a document's wall time actually goes (measured: Qari was 44.9s
-    of a 45.8s request). Only fields that come back empty fall back to their
-    remaining candidates, which are then batched together as well, so a second
-    pass still costs one batch rather than one call per field.
-
-    Each field is still independent: one field's failure is recorded on that field
-    only, and the first usable recognition (non-empty text) is kept as the selected
-    result so the report points to the crop that actually produced it.
+    Only empty or failed fields try their remaining candidates. Each field
+    keeps the crop that produced its first usable recognition.
     """
     apply_text_ocr_groups([(fields, text_fields)], reader)
 
 
 def apply_text_ocr_groups(groups, reader):
-    """OCR several fields maps in one concurrent pass over all their crops.
+    """Collect candidate crops across field maps for the reader's batch API.
 
     ``groups`` is a sequence of ``(fields, text_fields)``. Passing the front and
-    the back together means name, address, job and spouse are recognised at the
-    same time instead of one card side after the other, which is the difference
-    between three serial OCR calls and one concurrent batch.
+    back together allows batching across their text fields. Readers may still
+    process those crops individually, depending on their configuration.
     """
     targets = []
     for fields, text_fields in groups:

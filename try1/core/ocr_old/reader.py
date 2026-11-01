@@ -18,7 +18,9 @@ is ignored after the 2026-09-27 reorganization. V4 compatibility code is retaine
 only for explicit diagnostic calls; its weight paths point to the D: archive.
 """
 import json
+import logging
 import os
+from contextlib import ExitStack
 from pathlib import Path
 import threading
 import time
@@ -114,6 +116,7 @@ class QariOCR:
         self.max_tokens = int(os.environ.get('QARI_MAX_TOKENS', '128'))
         self.max_pixels = os.environ.get('QARI_MAX_PIXELS', '').strip()
         self.threads = int(os.environ.get('QARI_THREADS', '4'))
+        self.batch_size = int(os.environ.get('QARI_BATCH_SIZE', '1'))
         self.merge = os.environ.get('QARI_MERGE', '').strip().lower() in ('1', 'true', 'yes')
         # Disk offload lets the 8.87 GB V4 model run on a small-RAM machine (and
         # lets both models be served at once on a 15 GB box). Much slower.
@@ -122,6 +125,8 @@ class QariOCR:
         self.max_pixels_value = int(self.max_pixels) if self.max_pixels else 0
         if self.max_tokens < 1 or self.threads < 1:
             raise ValueError('QARI_MAX_TOKENS and QARI_THREADS must be positive')
+        if self.batch_size < 1:
+            raise ValueError('QARI_BATCH_SIZE must be positive')
         if self.max_pixels_value and self.max_pixels_value < 64 * 28 * 28:
             raise ValueError('QARI_MAX_PIXELS must be >= 50176 when set')
 
@@ -180,6 +185,9 @@ class QariOCR:
                 extra['max_pixels'] = 256 * 28 * 28
             processor = AutoProcessor.from_pretrained(str(self.directory), local_files_only=True,
                                                      trust_remote_code=False, **extra)
+            if self.batch_size > 1:
+                # Decoder-only generation must use left padding for unequal prompts.
+                processor.tokenizer.padding_side = 'left'
             model = model.to(device).eval()
         self.model, self.processor = model, processor
         self.device = device
@@ -221,17 +229,94 @@ class QariOCR:
             start = time.perf_counter()
             self._load()
             text, tokens = self._generate(self._prepare(image_path))
-            eos = self.model.generation_config.eos_token_id
-            eos = [eos] if isinstance(eos, int) else (eos or [])
-            truncated = tokens >= self.max_tokens
-            engine = 'Qari-OCR-0.4.0-VL-4B' if self.engine == 'qwen3_vl' else 'Qari-OCR-merged'
-            result = {'text': text or None,
-                      'status': 'needs_review' if truncated or not text else 'extracted',
-                      'needs_review': True, 'truncated': truncated, 'generated_tokens': tokens,
-                      'seconds': round(time.perf_counter() - start, 3), 'engine': engine,
-                      'model_dir': str(self.directory), 'device': self.device, 'max_pixels': self.max_pixels_value or None}
-            if self.adapter_dir:
-                result['adapter_dir'] = str(self.adapter_dir)
-            if self.offload:
-                result['offload'] = True
-            return result
+            return self._result(text, tokens, time.perf_counter() - start)
+
+    def _result(self, text, tokens, seconds):
+        truncated = tokens >= self.max_tokens
+        engine = 'Qari-OCR-0.4.0-VL-4B' if self.engine == 'qwen3_vl' else 'Qari-OCR-merged'
+        result = {'text': text or None,
+                  'status': 'needs_review' if truncated or not text else 'extracted',
+                  'needs_review': True, 'truncated': truncated, 'generated_tokens': tokens,
+                  'seconds': round(seconds, 3), 'engine': engine,
+                  'model_dir': str(self.directory), 'device': self.device, 'max_pixels': self.max_pixels_value or None}
+        if self.adapter_dir:
+            result['adapter_dir'] = str(self.adapter_dir)
+        if self.offload:
+            result['offload'] = True
+        return result
+
+    def _generate_many(self, images):
+        """Generate independent Qwen2-VL sequences in one padded model batch."""
+        import torch
+        prompts = []
+        for image in images:
+            messages = [{'role': 'user', 'content': [{'type': 'image', 'image': image},
+                                                     {'type': 'text', 'text': self.prompt}]}]
+            prompts.append(self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True))
+        inputs = self.processor(text=prompts, images=images, padding=True, return_tensors='pt')
+        inputs = {k: (v.to(self.device) if hasattr(v, 'to') else v) for k, v in inputs.items()}
+        with torch.inference_mode():
+            generated = self.model.generate(**inputs, max_new_tokens=self.max_tokens,
+                                           do_sample=False, num_beams=1, use_cache=True)
+        if len(generated) != len(images):
+            raise RuntimeError('Qari batch output count does not match its inputs')
+        eos = self.model.generation_config.eos_token_id
+        eos = [eos] if isinstance(eos, int) else (eos or [])
+        pad = self.model.generation_config.pad_token_id
+        if pad is None:
+            pad = self.processor.tokenizer.pad_token_id
+        outputs = []
+        for row in generated:
+            ids = row[inputs['input_ids'].shape[1]:].tolist()
+            # Finished sequences are padded to the longest output. Do not count
+            # those pads as generated tokens or mark short answers truncated.
+            for index, token in enumerate(ids):
+                if token in eos:
+                    ids = ids[:index + 1]
+                    break
+                if token == pad:
+                    ids = ids[:index]
+                    break
+            text = self.processor.decode(ids, skip_special_tokens=True,
+                                         clean_up_tokenization_spaces=False).strip()
+            outputs.append((text, len(ids)))
+        return outputs
+
+    def _extract_batch(self, paths):
+        with self.lock, ExitStack() as images_to_close:
+            start = time.perf_counter()
+            self._load()
+            images = []
+            for path in paths:
+                image = self._prepare(path)
+                images_to_close.callback(image.close)
+                images.append(image)
+            outputs = self._generate_many(images)
+            seconds = time.perf_counter() - start
+            return [dict(self._result(text, tokens, seconds), batch_size=len(paths))
+                    for text, tokens in outputs]
+
+    def extract_many(self, image_paths):
+        """Preserve input order; batch merged-model crops only when opted in."""
+        paths = list(image_paths)
+        results = []
+        for start in range(0, len(paths), self.batch_size):
+            chunk = paths[start:start + self.batch_size]
+            batch_results = None
+            if len(chunk) > 1 and self.engine == 'qwen2_vl':
+                try:
+                    batch_results = self._extract_batch(chunk)
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        'Qari batch failed; retrying its crops individually')
+            if batch_results is None:
+                batch_results = []
+                for path in chunk:
+                    try:
+                        batch_results.append(self.extract(path))
+                    except Exception as exc:
+                        batch_results.append({'text': None, 'status': 'ocr_error',
+                                              'error': f'{type(exc).__name__}: {exc}'})
+            results.extend(batch_results)
+        return results

@@ -97,14 +97,7 @@ def apply_back_classifiers(fields, models=None, threshold=0.9):
 
 
 def run_text_ocr(side_results, qari_device='cpu'):
-    """OCR every text crop of both sides in one concurrent batch.
-
-    Name, address, job and spouse all go to the OCR together instead of the front
-    side finishing before the back side starts. Qari dominates the request - on
-    the reference card it was 44.9s of a 45.8s response - and OCR calls run at
-    the same speed whether they are issued one at a time or several at once, so
-    overlapping them is where the wall time goes.
-    """
+    """Offer text crops from both sides to Qari's configurable batching API."""
     groups = []
     for side, (_, result) in side_results.items():
         fields = result.get('fields') or {}
