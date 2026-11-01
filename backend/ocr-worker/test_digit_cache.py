@@ -52,11 +52,41 @@ class DigitCacheTests(unittest.TestCase):
             with patch.object(strict.importlib.util, 'spec_from_file_location', return_value=spec), \\
                  patch.object(strict.importlib.util, 'module_from_spec', return_value=architecture), \\
                  patch.object(sys.modules['torch'], 'load', checkpoint, create=True):
-                models = [reader.__globals__['_strict_module']()._model() for reader in readers]
+                # Startup loads weights; later simultaneous callers only hit the cache.
+                digits.warm_model()
+                digits.warm_model()
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=3) as pool:
+                    models = list(pool.map(
+                        lambda reader: reader.__globals__['_strict_module']()._model(), readers))
                 models.append(date_reader.digits._strict_module()._model())
             assert all(value is model for value in models)
             assert checkpoint.call_count == 1, checkpoint.call_count
             assert architecture.ArabicDigitCNN.call_count == 1
+        """)
+
+    def test_initialize_preloads_digit_model_and_propagates_loading_failure(self):
+        self.check_script("""
+            sys.path.insert(0, str(Path('backend/ocr-worker').resolve()))
+            import inference
+            from core.digits.files.digit_extractor import extract_digits as digits
+            from core import runtime
+            from pipeline import front_id, document
+
+            for failure in (None, RuntimeError('invalid digit checkpoint')):
+                with patch.object(Path, 'is_file', return_value=True), \\
+                     patch.object(runtime, 'resolve_device', return_value='cpu'), \\
+                     patch.object(front_id, 'load_detector'), \\
+                     patch.object(front_id, 'load_qari'), \\
+                     patch.object(document, 'load_field_classifier'), \\
+                     patch.object(digits, 'warm_model', side_effect=failure) as warm:
+                    try:
+                        inference.initialize()
+                    except RuntimeError as exc:
+                        assert exc is failure
+                    else:
+                        assert failure is None, 'Startup must reject invalid weights'
+                    warm.assert_called_once_with()
         """)
 
     def test_custom_extractor_reused_and_missing_path_still_rejected(self):

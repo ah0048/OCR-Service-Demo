@@ -361,6 +361,11 @@ def _strict_module():
     return module
 
 
+def warm_model():
+    """Load the shared digit CNN before document threads start using it."""
+    _strict_module()._model()
+
+
 def extract_digits(image_path: str, zero_area_ratio: float = 0.32) -> str:
     """Return exactly 14 recognized digits, or raise ValueError for review.
 

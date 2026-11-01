@@ -98,9 +98,10 @@ def initialize():
     validate_image_api_url()
     sys.path.insert(0, str(MODEL_ROOT))
     from project_config import DETECTOR_MODEL, BACK_DETECTOR_MODEL, FIELD_CLASSIFIER_MODELS
-    from pipeline.front_id import load_detector, load_qari, load_extractor
+    from pipeline.front_id import load_detector, load_qari
     from pipeline.document import load_field_classifier
-    from project_config import DIGIT_EXTRACTOR, ROOT as project_root
+    from core.digits.files.digit_extractor.extract_digits import warm_model
+    from project_config import ROOT as project_root
     from core.runtime import resolve_device
     global DEVICE
     DEVICE = resolve_device(DEVICE)
@@ -111,7 +112,7 @@ def initialize():
         raise RuntimeError('Missing offline model assets: ' + ', '.join(missing))
     load_detector(DETECTOR_MODEL)
     load_detector(BACK_DETECTOR_MODEL)
-    load_extractor(DIGIT_EXTRACTOR)
+    warm_model()
     for checkpoint in FIELD_CLASSIFIER_MODELS.values():
         load_field_classifier(Path(checkpoint).resolve())
     load_qari(None, DEVICE).warm()
