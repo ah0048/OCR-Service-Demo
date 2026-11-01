@@ -123,8 +123,11 @@ class WorkerTests(unittest.TestCase):
         self.method = SimpleNamespace(delivery_tag=1)
 
     def invoke(self, run, payload=None):
+        self.channel.consume.return_value = iter([
+            (self.method, None, json.dumps(JOB if payload is None else payload).encode())])
+        self.channel.connection.process_data_events.side_effect = lambda **kwargs: time.sleep(.001)
         with patch.object(worker, 'run_ocr', run), ThreadPoolExecutor(max_workers=1) as executor:
-            worker.process(self.channel, self.method, None, json.dumps(JOB if payload is None else payload).encode(), executor)
+            worker.consume_jobs(self.channel, executor, 1, lambda: False)
 
     def result(self):
         return json.loads(self.channel.basic_publish.call_args.kwargs['body'])

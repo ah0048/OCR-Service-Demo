@@ -1,7 +1,7 @@
 """OCR worker: consumes `ocr-jobs`, runs inference, publishes to `ocr-results`.
 
-Fair dispatch: prefetch_count=1, manual acks. The job is acked only after the result is
-published (with publisher confirms). Run several processes to scale out.
+Bounded prefetch and job threads; shared models retain one document-inference slot.
+The job is acked only after its result is published with publisher confirms.
 """
 import json
 import logging
@@ -10,7 +10,8 @@ import signal
 import socket
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import pika
@@ -75,7 +76,27 @@ def publish_started(channel, job_id, started_at):
         log.warning("Could not publish job-started event", extra={"extra_fields": {"jobId": job_id}})
 
 
-def process(channel, method, properties, body, executor):
+def job_concurrency():
+    try:
+        value = int(os.getenv('OCR_JOB_CONCURRENCY', '1'))
+    except ValueError:
+        raise ValueError('OCR_JOB_CONCURRENCY must be an integer from 1 to 8') from None
+    if not 1 <= value <= 8:
+        raise ValueError('OCR_JOB_CONCURRENCY must be an integer from 1 to 8')
+    return value
+
+
+@dataclass
+class PendingJob:
+    future: Future
+    delivery_tag: int
+    job: dict
+    started_at: datetime
+    timer: float
+
+
+def submit_job(channel, method, body, executor):
+    """Validate and submit without waiting; only the consumer thread calls Pika."""
     started_at = datetime.now(timezone.utc)
     try:
         job = json.loads(body)
@@ -89,16 +110,20 @@ def process(channel, method, properties, body, executor):
         channel.basic_nack(method.delivery_tag, requeue=False)  # permanent: retry won't help
         return
 
+    job['jobId'] = job_id
     info("Processing job", jobId=job_id, correlationId=job.get("correlationId"))
     publish_started(channel, job_id, started_at)
     t0 = time.perf_counter()
+    return PendingJob(executor.submit(run_ocr, job), method.delivery_tag, job, started_at, t0)
+
+
+def finish_job(channel, pending):
+    """Publish and acknowledge one completed future on its original channel."""
+    job = pending.job
+    job_id = str(job['jobId'])
     try:
-        future = executor.submit(run_ocr, job)
-        while not future.done():
-            # Pika stays on this thread; long inference must not block heartbeats.
-            channel.connection.process_data_events(time_limit=1)
         try:
-            out = future.result()
+            out = pending.future.result()
         except Exception:
             log.exception("Inference failed", extra={"extra_fields": {"jobId": job_id}})
             out = OcrOutput("TechnicalError", details={"errorCode": "INFERENCE_ERROR"})
@@ -109,8 +134,8 @@ def process(channel, method, properties, body, executor):
             "extractedFields": out.fields,
             "details": out.details,
             "confidence": out.confidence,
-            "processingMs": int((time.perf_counter() - t0) * 1000),
-            "startedAt": started_at.isoformat(),
+            "processingMs": int((time.perf_counter() - pending.timer) * 1000),
+            "startedAt": pending.started_at.isoformat(),
             "modelVersion": MODEL_VERSION,
             "workerId": WORKER_ID,
         }
@@ -124,17 +149,72 @@ def process(channel, method, properties, body, executor):
         log.exception("Result publication failed", extra={"extra_fields": {"jobId": job_id}})
         raise  # Connection closes; RabbitMQ redelivers the unacked job.
 
-    channel.basic_ack(method.delivery_tag)
+    channel.basic_ack(pending.delivery_tag)
     info("Job done", jobId=job_id, outcome=out.outcome, ms=result["processingMs"])
 
 
+def consume_jobs(channel, executor, concurrency, should_stop):
+    """Bound accepted work and keep completions/heartbeats on this thread."""
+    channel.basic_qos(prefetch_count=concurrency)
+    pending = []
+
+    def finish_ready():
+        for task in pending[:]:
+            if task.future.done():
+                finish_job(channel, task)
+                pending.remove(task)
+
+    deliveries = channel.consume(JOBS_QUEUE, auto_ack=False, inactivity_timeout=0.1)
+    try:
+        while not should_stop():
+            finish_ready()
+            if len(pending) >= concurrency:
+                channel.connection.process_data_events(time_limit=0.1)
+                continue
+            try:
+                method, props, body = next(deliveries)
+            except StopIteration:
+                break
+            if should_stop():
+                break  # Delivered but unstarted: requeued when the connection closes.
+            if method is not None:
+                task = submit_job(channel, method, body, executor)
+                if task is not None:
+                    pending.append(task)
+        # Graceful stop: accept no more jobs, finish all already-submitted work.
+        while pending:
+            finish_ready()
+            if pending:
+                channel.connection.process_data_events(time_limit=0.1)
+    except BaseException:
+        # Close before waiting for running inference so unacked deliveries can
+        # be redelivered. These futures must never publish via a new channel.
+        try:
+            if channel.connection.is_open:
+                channel.connection.close()
+        except Exception:
+            log.warning('Could not close failed RabbitMQ connection')
+        raise
+    finally:
+        # Cancel queued work and finish running calls before any reconnect.
+        # Nothing is submitted to the next connection until this pool is clear.
+        for task in pending:
+            task.future.cancel()
+        for task in pending:
+            try:
+                task.future.result()
+            except Exception:
+                pass
+
+
 def main():
+    concurrency = job_concurrency()
     stop = False
 
     def on_signal(*_):
         nonlocal stop
         stop = True
-        log.info("Shutdown requested, finishing current job")
+        log.info("Shutdown requested, finishing accepted jobs")
 
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
@@ -144,8 +224,8 @@ def main():
     info("Loading offline OCR models")
     initialize()
     info("OCR models ready", imageSource="api" if IMAGE_API_URL else "filesystem",
-         device=os.getenv("OCR_DEVICE", "cpu"))
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr-inference")
+         device=os.getenv("OCR_DEVICE", "cpu"), jobConcurrency=concurrency, inferenceSlots=1)
+    executor = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ocr-inference")
     while not stop:
         conn = None
         try:
@@ -155,14 +235,8 @@ def main():
             declare_queue(channel, JOBS_QUEUE)
             declare_queue(channel, RESULTS_QUEUE)
             declare_queue(channel, EVENTS_QUEUE)
-            channel.basic_qos(prefetch_count=1)  # fair dispatch
             info("Connected, waiting for jobs", queue=JOBS_QUEUE)
-            for method, props, body in channel.consume(JOBS_QUEUE, auto_ack=False, inactivity_timeout=1):
-                if stop:
-                    break
-                if method is None:
-                    continue
-                process(channel, method, props, body, executor)
+            consume_jobs(channel, executor, concurrency, lambda: stop)
             channel.cancel()
             conn.close()
         except (pika.exceptions.AMQPError, OSError):

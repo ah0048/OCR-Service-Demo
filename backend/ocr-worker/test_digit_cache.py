@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 # Isolated subprocess: dependency stubs never affect other worker tests.
 for name in ('PIL', 'cv2', 'numpy', 'torch'):
     sys.modules[name] = ModuleType(name)
+sys.modules['numpy'].ndarray = object
 sys.modules['PIL'].Image = SimpleNamespace()
 sys.modules['PIL'].ImageOps = SimpleNamespace()
 sys.path.insert(0, str(Path('try1').resolve()))

@@ -15,7 +15,7 @@ Angular upload -> .NET API -> shared image files + PostgreSQL
                                     API / results SSE -> Angular
 ```
 
-The `job-events` queue carries best-effort OCR-started notifications. Each OCR worker has prefetch 1 and handles one document at a time. Models are loaded once per process before it consumes jobs. RabbitMQ heartbeats continue while inference runs.
+The `job-events` queue carries best-effort OCR-started notifications. By default each OCR worker has prefetch 1. `OCR_JOB_CONCURRENCY` can raise both prefetch and the job-thread limit to overlap image preparation with inference. One document at a time enters the shared model pipeline, and models are loaded once per process before consumption. RabbitMQ publishing, acknowledgments and heartbeat handling remain on the connection thread.
 
 ## Run locally
 
@@ -162,6 +162,29 @@ staggered; check each log for `OCR models ready` and `Connected, waiting for job
 before restarting. A lock prevents concurrent start/stop commands. A legacy
 single worker must be stopped before starting the numbered pool.
 
+To test overlapping image preparation inside **one process**, stop the existing
+workers, wait until `status` reports zero, then run in the Mac SSH shell:
+
+```bash
+OCR_JOB_CONCURRENCY=2 QARI_BATCH_SIZE=1 bash backend/scripts/mac-worker.sh start 1
+```
+
+`OCR_JOB_CONCURRENCY` defaults to 1 and accepts integers from 1 to 8. It sets
+prefetch and the maximum accepted/submitted jobs per process. Threads share the
+loaded models; only image downloading/validation overlaps model inference.
+The document-inference gate remains at one. Increasing this setting does not
+create model copies or run multiple Qari generations simultaneously, and is
+not a guarantee of higher throughput. `QARI_BATCH_SIZE=1` retains the better
+performing configuration from the Mac batching test.
+
+This differs from `start 2` / `OCR_WORKERS=2`, which creates two processes and
+two model sets. Existing processes retain their startup configuration; `start`
+reuses them rather than applying new environment settings. Restart to change
+concurrency. Shutdown drains all accepted jobs. After a connection/publication
+failure, queued work is cancelled and running calls finish before reconnecting;
+old futures never publish or acknowledge on the replacement connection.
+`processingMs` includes downloads, validation and waiting for the inference slot.
+
 Each worker uses `nohup`, validates its PID against the actual worker command,
 and writes `.data/logs/mac-ocr-1.log` / `mac-ocr-1.pid`, then `-2`, `-3`, etc.
 The `logs` command follows all existing numbered log files. Pools do not
@@ -265,6 +288,7 @@ Python:
 - `OCR_IMAGE_ROOT`: the **same storage** as API `Images__Root`.
 - `OCR_PROJECT_ROOT`: folder containing `project_config.py`, default `<repo>/try1`.
 - `OCR_DEVICE`: `cpu` (default), `cuda`, `mps` or `auto`.
+- `OCR_JOB_CONCURRENCY`: job threads and prefetch per process, default `1`, range `1..8`; model inference retains one document slot.
 - `OCR_MODEL_VERSION`: result provenance label, default `egyptian-id-try1-v1`.
 - `RABBITMQ_HOST/PORT/USER/PASSWORD`, `LOG_LEVEL`.
 
@@ -276,6 +300,12 @@ For workers on separate machines/containers, mount the shared image directory at
 dotnet build backend/OcrDemo.sln --no-restore
 npm.cmd --prefix frontend run build
 try1/.venv/Scripts/python.exe -m unittest discover -s backend/ocr-worker -p test_worker.py
+try1/.venv/Scripts/python.exe -m unittest discover -s backend/ocr-worker -p test_dispatcher.py
+
+# Optional: real RabbitMQ using temporary exclusive queues and mocked inference:
+$env:OCR_RUN_BROKER_TESTS = "1"
+try1/.venv/Scripts/python.exe -m unittest discover -s backend/ocr-worker -p test_dispatcher_rabbitmq.py
+Remove-Item Env:OCR_RUN_BROKER_TESTS
 dotnet run --project backend/tests/Pipeline.Regression
 
 # With API and workers running; submits one real card and two corrupt-image test jobs:
@@ -289,7 +319,7 @@ Regression tests cover field mapping, review preservation, ID conflicts, storage
 
 ## Delivery guarantees and remaining limitations
 
-Durable queues, persistent messages, publisher confirms, prefetch 1 and manual acknowledgements provide **at-least-once** delivery. OCR jobs are acknowledged only after result publication is confirmed. Business workers acknowledge only after their database transaction commits; row locking makes duplicate result delivery idempotent.
+Durable queues, persistent messages, publisher confirms, bounded prefetch (default 1) and manual acknowledgements provide **at-least-once** delivery. OCR jobs are acknowledged only after result publication is confirmed. Business workers acknowledge only after their database transaction commits; row locking makes duplicate result delivery idempotent.
 
 The existing API save-then-publish design still has **no transactional outbox**. A crash or broker outage between persistence and publication can strand queued jobs; a detected publication failure returns 503 and retains their images. Database/broker failures are retried through redelivery; inference exceptions are recorded as final technical errors. There is no delayed retry policy for inference failures.
 
