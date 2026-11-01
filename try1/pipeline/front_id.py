@@ -155,9 +155,20 @@ def _extract_many(reader, crops):
 
 
 def load_extractor(path):
+    """Reuse the digit reader and its CNN cache across document sides and jobs."""
     path = Path(path).resolve()
+    return _load_extractor(path)
+
+
+@lru_cache(maxsize=2)
+def _load_extractor(path):
     if not path.is_file():
         raise FileNotFoundError(f'Digit extractor not found: {path}')
+    if path == Path(DEFAULT_EXTRACTOR).resolve():
+        # Date recognition imports this same module. A dynamic import here
+        # would create a separate strict-reader/model cache on every call.
+        from core.digits.files.digit_extractor import extract_digits as module
+        return module.extract_id_details
     spec = importlib.util.spec_from_file_location('front_id_digit_extractor', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
