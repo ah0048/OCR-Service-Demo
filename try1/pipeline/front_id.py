@@ -3,6 +3,8 @@ import argparse
 import importlib.util
 import json
 import math
+import threading
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +18,9 @@ from pipeline.arabic_text import remove_tashkeel
 DEFAULT_MODEL = DETECTOR_MODEL
 DEFAULT_EXTRACTOR = DIGIT_EXTRACTOR
 FIELDS = ('id', 'name', 'address')
+_detector_locks = {}
+_detector_locks_guard = threading.Lock()
+_mps_detection_lock = threading.Lock()
 
 
 @lru_cache(maxsize=2)
@@ -23,11 +28,24 @@ def load_detector(model_path=DEFAULT_MODEL):
     """Load YOLO weights once and reuse them across requests.
 
     Loading the detector takes several seconds per request; caching it keeps
-    that cost out of response time. Callers must serialize inference (the API
-    already does with its per-request lock).
+    that cost out of response time. Prediction callers must use
+    _locked_detector() to protect the shared instance.
     """
     from ultralytics import YOLO
     return YOLO(str(Path(model_path).resolve()))
+
+
+@contextmanager
+def _locked_detector(model_path, device):
+    """Serialize shared-model access, and all detector calls on MPS."""
+    path = Path(model_path).resolve()
+    with _detector_locks_guard:
+        lock = _detector_locks.setdefault(path, threading.Lock())
+    # Separate front/back models can overlap on CPU/CUDA. On MPS their Metal
+    # shader-cache workaround must also hold across different document calls.
+    mps_lock = _mps_detection_lock if str(device).split(':')[0] == 'mps' else nullcontext()
+    with mps_lock, lock:
+        yield load_detector(path)
 
 
 @lru_cache(maxsize=2)
@@ -242,18 +260,18 @@ def run_pipeline(source, output=PIPELINE_OUTPUT, model_path=DEFAULT_MODEL,
     extractor = load_extractor(extractor_path)
     with Image.open(source) as raw:
         image = ImageOps.exif_transpose(raw).convert('RGB')
-    model = load_detector(model_path)
-    names = model.names
-    labels = {str(name).strip().lower() for name in names.values()}
-    if not set(field_names).issubset(labels):
-        raise ValueError(f'Model must contain {field_names}; got {names}')
-    result = model.predict(source=image, conf=conf, imgsz=imgsz, device=device,
-                           verbose=False)[0]
-    detections = []
-    for box in result.boxes:
-        detections.append({'label': str(names[int(box.cls.item())]).strip().lower(),
-                           'confidence': float(box.conf.item()),
-                           'box': box.xyxy[0].cpu().tolist()})
+    with _locked_detector(model_path, device) as model:
+        names = dict(model.names)
+        labels = {str(name).strip().lower() for name in names.values()}
+        if not set(field_names).issubset(labels):
+            raise ValueError(f'Model must contain {field_names}; got {names}')
+        result = model.predict(source=image, conf=conf, imgsz=imgsz, device=device,
+                               verbose=False)[0]
+        detections = []
+        for box in result.boxes:
+            detections.append({'label': str(names[int(box.cls.item())]).strip().lower(),
+                               'confidence': float(box.conf.item()),
+                               'box': box.xyxy[0].cpu().tolist()})
     run_dir = Path(output).resolve() / f'{source.stem}_{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
     fields = crop_fields(image, detections, run_dir, extractor, padding, field_names)
