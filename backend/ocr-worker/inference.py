@@ -3,6 +3,7 @@ import math
 import os
 import sys
 import tempfile
+import threading
 import warnings
 import time
 from http.client import HTTPException
@@ -21,6 +22,7 @@ MODEL_VERSION = os.getenv('OCR_MODEL_VERSION', 'egyptian-id-try1-v1')
 DEVICE = os.getenv('OCR_DEVICE', 'cpu')
 IMAGE_API_URL = os.getenv('OCR_IMAGE_API_URL', '').rstrip('/')
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
+_inference_lock = threading.Lock()
 
 
 class ImageDownloadError(Exception):
@@ -250,6 +252,7 @@ def map_report(report):
 
 
 def run_ocr(job):
+    """Prepare images independently; share one document-inference slot per process."""
     from PIL import UnidentifiedImageError, Image
     with tempfile.TemporaryDirectory(prefix='ocr-') as output:
         try:
@@ -263,5 +266,8 @@ def run_ocr(job):
                 Image.DecompressionBombWarning):
             return OcrOutput('Unreadable', 0.0, details={'errorCode': 'INVALID_IMAGE_PAIR'})
         from pipeline.document import run_document
-        _, report = run_document(front, back, output=output, device=DEVICE, qari_device=DEVICE)
+        # Keep heavyweight model work bounded while other job threads can
+        # download/validate their own images outside this gate.
+        with _inference_lock:
+            _, report = run_document(front, back, output=output, device=DEVICE, qari_device=DEVICE)
         return map_report(report)
