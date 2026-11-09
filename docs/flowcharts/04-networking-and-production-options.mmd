@@ -1,0 +1,89 @@
+%% Three separate alternatives: A is implemented; B and C are proposals.
+%% This file does not claim that Nginx, gRPC, production TLS or systemd exist today.
+flowchart TB
+    subgraph CURRENT["A - IMPLEMENTED development topology: Windows plus Mac"]
+        subgraph WIN["Windows application machine"]
+            BROWSER["Angular browser UI<br/>localhost:4200"]
+            API[".NET API<br/>localhost:5125"]
+            BUSINESS[".NET business workers"]
+            RABBIT["RabbitMQ Docker container<br/>Host AMQP 5672; management HTTP 15672"]
+            PG[("PostgreSQL Docker container<br/>Host 5433 maps to container 5432")]
+            FILES[("Windows image files<br/>.data/images")]
+            SSHCLIENT["Managed Windows SSH tunnel process<br/>Opens an SSH connection to Mac port 22<br/>Requests reverse loopback forwards"]
+        end
+        subgraph MAC["Mac - no Docker, .NET or database required"]
+            SSHD["Mac SSH server on port 22"]
+            AMQPFWD["Mac loopback listener<br/>127.0.0.1:15673"]
+            HTTPFWD["Mac loopback listener<br/>127.0.0.1:15125"]
+            OCR["Python queue consumer<br/>Pika plus shared offline OCR models<br/>One process, N job threads, one inference slot"]
+            WEIGHTS[("Local offline model assets<br/>Source directory and model paths stay on Mac")]
+        end
+        BROWSER -->|HTTP upload and REST queries| API
+        API -->|SSE dashboard and results| BROWSER
+        API --> FILES
+        API --> PG
+        API -->|Publish jobs via AMQP| RABBIT
+        RABBIT -->|Consume results and events| BUSINESS --> PG
+        RABBIT -->|Management HTTP statistics| API
+        API -->|Read completed rows for SSE| PG
+        SSHCLIENT -.->|SSH control connection| SSHD
+        SSHD -.->|Create reverse-forward listener| AMQPFWD
+        SSHD -.->|Create reverse-forward listener| HTTPFWD
+        OCR -->|AMQP jobs, events, results and ACKs| AMQPFWD
+        AMQPFWD -->|Inside SSH tunnel to Windows 127.0.0.1:5672| RABBIT
+        OCR -->|HTTP image GET requests| HTTPFWD
+        HTTPFWD -->|Inside SSH tunnel to Windows 127.0.0.1:5125| API
+        WEIGHTS --> OCR
+        CURRENTNOTE["SSH carries the existing AMQP and HTTP traffic<br/>The worker is not an HTTP/gRPC server<br/>An interrupted tunnel removes the forwarding listeners<br/>Ordinary SSH login alone does not restore forwarding"]
+        CURRENTNOTE -.-> SSHCLIENT
+    end
+
+    subgraph PRODUCTION["B - PROPOSED production topology: retain queue-consuming OCR service"]
+        PUSER["Browser or client application"]
+        PNGINX["Nginx HTTPS reverse proxy<br/>Certificates and HTTP routing"]
+        PAPI["Application API<br/>Authenticated job submission, image access and SSE"]
+        PSTORAGE[("Persistent original image storage")]
+        PDB[("Application database")]
+        PBROKER["Private RabbitMQ service<br/>AMQPS with TLS, conventionally port 5671<br/>Dedicated service accounts and permissions"]
+        PBIZ["Business result and progress consumers"]
+        PGPU["Linux GPU-host OCR service<br/>Systemd or deployment-platform supervision<br/>Cached models and bounded inference capacity<br/>Connects outbound to broker and image API"]
+        PNOTE["Requires implementation and infrastructure work<br/>Private routing/VPN and firewall rules<br/>Python and .NET broker TLS configuration<br/>HTTPS service authentication and certificate trust<br/>Nginx config including SSE streaming behavior<br/>No runtime SSH tunnel; SSH may remain for administration"]
+        PUSER -->|HTTPS upload, queries and SSE connection| PNGINX -->|HTTP or HTTPS upstream| PAPI
+        PAPI --> PDB
+        PAPI --> PSTORAGE
+        PAPI -->|AMQPS job publication| PBROKER
+        PGPU <-->|AMQPS consume jobs and publish results/events| PBROKER
+        PGPU -->|Authenticated HTTPS image download| PNGINX
+        PBROKER --> PBIZ --> PDB
+        PNOTE -.-> PGPU
+        PNOTE -.-> PNGINX
+    end
+
+    subgraph HYBRID["C - OPTIONAL future hybrid: RabbitMQ scheduling plus gRPC inference"]
+        HAPI["Application API"]
+        HQ["RabbitMQ<br/>Durable jobs, results and progress"]
+        ADAPTER["Queue-consuming adapter<br/>Own original job delivery and retry policy"]
+        HNGINX["Optional Nginx gRPC proxy<br/>grpc_pass to inference service"]
+        RPC["GPU inference service exposing gRPC<br/>RecognizeDocument RPC and health/readiness<br/>One loaded model set per service process<br/>Bounded inference requests"]
+        HIMAGE["Authenticated image API or object storage<br/>Referenced by job rather than broker image bytes"]
+        HBACK["Adapter receives RPC result<br/>Publish result with confirmation<br/>Then ACK original job"]
+        HBIZ["Business consumer commits DB transaction<br/>Then ACKs result"]
+        HNOTE["Not implemented<br/>Define protobuf contract, authentication and TLS<br/>Set deadlines and admission limits<br/>Handle ambiguous RPC completion and duplicate retries<br/>Do not treat gRPC as a durable job queue"]
+        HAPI -->|Publish job| HQ -->|Unacked job delivery| ADAPTER
+        ADAPTER -->|gRPC request| HNGINX -->|gRPC upstream| RPC
+        RPC -->|Download referenced images over HTTPS| HIMAGE
+        RPC -->|gRPC response through proxy| HBACK
+        HBACK -->|Confirmed result publication and original job ACK| HQ
+        HQ -->|Result delivery| HBIZ
+        HNOTE -.-> ADAPTER
+        HNOTE -.-> RPC
+    end
+
+    classDef current fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e;
+    classDef proposed fill:#dcfce7,stroke:#15803d,color:#14532d;
+    classDef future fill:#ede9fe,stroke:#7c3aed,color:#4c1d95;
+    classDef note fill:#fef3c7,stroke:#d97706,color:#78350f;
+    class BROWSER,API,BUSINESS,RABBIT,PG,FILES,SSHCLIENT,SSHD,AMQPFWD,HTTPFWD,OCR,WEIGHTS current;
+    class PUSER,PNGINX,PAPI,PSTORAGE,PDB,PBROKER,PBIZ,PGPU proposed;
+    class HAPI,HQ,ADAPTER,HNGINX,RPC,HIMAGE,HBACK,HBIZ future;
+    class CURRENTNOTE,PNOTE,HNOTE note;

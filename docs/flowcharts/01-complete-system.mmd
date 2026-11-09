@@ -1,0 +1,144 @@
+%% Implemented optimized queue-based system. Nginx and gRPC are not implemented.
+%% Main sources: API Program.cs, ImageStore.cs, JobPublisher.cs, worker.py,
+%% inference.py, ResultConsumer.cs, ProgressConsumer.cs, Dashboard.cs.
+flowchart TB
+    subgraph CLIENT["Browser - Angular frontend on Windows port 4200"]
+        USER["User selects one card or a batch of cards"]
+        FORM["Pair front and back images<br/>Collect client reference or batch name"]
+        HTTP["HTTP multipart upload<br/>Single: POST /api/jobs/upload<br/>Batch: POST /api/jobs/batch/upload"]
+        REFHTTP["Alternative: submit existing uploaded references<br/>JSON POST /api/jobs or /api/jobs/batch"]
+        ACCEPTED["Receive HTTP 202 Accepted<br/>Track jobId or batchId; processing continues asynchronously"]
+        SCREENS["Overview, batches, jobs, technical results and business results<br/>Job drawer shows fields, evidence, reasons and image previews"]
+        USER --> FORM --> HTTP
+        USER --> REFHTTP
+    end
+
+    subgraph API["Windows - .NET API on port 5125"]
+        VALIDATE{"Valid multipart structure, pair count,<br/>client reference or matched batch filenames,<br/>image signatures and size limits?"}
+        BADUPLOAD["HTTP validation error<br/>No OCR job is submitted"]
+        LIMITS["JPEG, PNG, WEBP, BMP or TIFF<br/>Each image at most 20 MiB<br/>Request at most 256 MiB<br/>Batch default at most 100 pairs"]
+        NEWJOB["Generate jobId and correlationId<br/>Optional batchId and batchName<br/>Set status Queued and createdAt"]
+        SAVEFILES["Save original image bytes using ImageStore<br/>ImageReference is the opaque jobId without hyphens"]
+        SAVEFAILED["File-save failure<br/>Remove newly created image directories; request fails"]
+        SAVEDB["Save job rows in PostgreSQL before publishing"]
+        VALIDREF{"Nonempty references and existing image pairs?<br/>JSON batch count between 1 and configured max<br/>Default JSON batch maximum 10000"}
+        REFJOB["Generate new job/correlation IDs and optional batch ID<br/>Reuse supplied existing imageReference<br/>No image files copied for this submission"]
+        PUBLISH["JobPublisher serializes persistent JSON messages<br/>Publish through default exchange to ocr-jobs<br/>Wait for publisher confirms"]
+        PUBLISHED{"All job publications confirmed?"}
+        GAP["HTTP 503 on publication failure<br/>Saved jobs remain Queued<br/>Some batch messages might already be published<br/>No transactional outbox or automatic republish"]
+        IMAGEGET["GET /api/jobs/:jobId/images/:side<br/>Look up job and its imageReference<br/>Allow only front or back; return 404 if unavailable<br/>Stream original bytes with no-store"]
+        READJOBS["GET /api/jobs and /api/jobs/:jobId<br/>Paging, search, batch/status/outcome filters"]
+        SNAPSHOT["Dashboard snapshot builder<br/>Database aggregates plus cached broker statistics"]
+        DASHSTREAM["GET /api/dashboard/stream<br/>SSE snapshots about every 1 second"]
+        RESULTSTREAM["GET /api/results/stream<br/>Poll completed database rows every 500 ms<br/>Initial backlog default 30; overlap cursor and deduplicate"]
+        NOSTORAGE["Images are not PostgreSQL blobs<br/>API performs no model inference"]
+    end
+
+    subgraph STORAGE["Windows persistent storage"]
+        FILES[("Original image files<br/>.data/images/opaque-reference/front<br/>.data/images/opaque-reference/back")]
+        DB[("PostgreSQL jobs table<br/>Metadata, references, status and outcome<br/>Extracted fields and OCR details as JSONB<br/>Confidence, reasons, timings, model and worker IDs")]
+    end
+
+    subgraph BROKER["Windows - RabbitMQ on port 5672; management HTTP on port 15672"]
+        JOBS[["ocr-jobs - durable queue<br/>jobId, correlationId, clientReference, imageReference<br/>No image bytes"]]
+        EVENTS[["job-events - durable queue<br/>Best-effort started notification<br/>jobId, workerId, startedAt"]]
+        RESULTS[["ocr-results - durable queue<br/>Fields, confidence, details and OCR outcome<br/>Timings, modelVersion, IDs and workerId<br/>No original image bytes"]]
+        JOBDLQ[["ocr-jobs.dlq<br/>Malformed job messages"]]
+        RESULTDLQ[["ocr-results.dlq<br/>Malformed results or unknown jobs"]]
+        MGMT["Management API<br/>Queue depths, unacked messages, consumers and rates<br/>Worker count reflects consumer processes, not job threads"]
+        EVENTNOTE["job-events.dlq is declared<br/>Current progress consumer ACKs failed events<br/>instead of retrying or sending them to this DLQ"]
+    end
+
+    subgraph OCR["Mac today / Linux GPU host later - optimized Python OCR process"]
+        START["Initialize offline models once per process<br/>Front and back YOLO, digit CNN,<br/>three field classifiers and Qari"]
+        CONSUME["Main Pika thread consumes ocr-jobs<br/>Manual ACK; prefetch equals OCR_JOB_CONCURRENCY<br/>Default 1; tested configuration 2"]
+        JOBVALID{"Valid JSON, UUIDs<br/>and string imageReference?"}
+        DISPATCH["Submit a future to a bounded thread pool<br/>At most N accepted/submitted jobs<br/>Heartbeat and broker operations stay on main thread"]
+        TEMP["Per-job temporary directory<br/>HTTP download and image validation can overlap<br/>another job's model inference"]
+        DOWNLOAD["Image HTTP client<br/>Uses fixed job image routes at OCR_IMAGE_API_URL<br/>Mac URL: http://127.0.0.1:15125"]
+        PREPARED{"Images available and valid?<br/>Decode/verify, supported format,<br/>at most 20 MiB, 25 million pixels, single frame"}
+        IMAGEERROR["Terminal OCR output<br/>Unreadable for invalid/missing images<br/>TechnicalError for exhausted download/network failures"]
+        GATE["Acquire process-wide inference gate<br/>Only ONE document enters the model pipeline<br/>All job threads share the loaded model set"]
+        PIPELINE["Detect front/back fields and read national IDs<br/>Require independent ID agreement<br/>Read text with Qari; date and printed-word classifiers<br/>Build fields, evidence and heuristic confidence"]
+        CLEANUP["Release inference gate; map the report<br/>Delete per-job temporary images, crops and reports"]
+        MAINRESULT["Main Pika thread collects completed futures<br/>An unhandled inference exception becomes TechnicalError"]
+        PUBRESULT["Publish persistent OCR result with mandatory routing<br/>Wait for publisher confirmation"]
+        CONFIRMED{"Result publication confirmed?"}
+        ACKJOB["ACK original job delivery<br/>Its result is safely queued, not necessarily committed to DB yet"]
+        REDO["Close failed connection; leave job unacked<br/>Cancel queued futures; wait for running calls<br/>Reconnect after retry delay; broker can redeliver"]
+        MULTIPROCESS["Additional Python processes each load their own models<br/>Threads share weights only within their own process"]
+    end
+
+    subgraph BUSINESS["Windows - .NET business worker processes"]
+        PROGRESS["ProgressConsumer reads job-events<br/>Guarded UPDATE only when status is Queued<br/>Set OcrInProgress, startedAt and OCR worker ID<br/>Always ACK; lost or late events are harmless"]
+        RESULTCON["ResultConsumer reads ocr-results<br/>Prefetch 1 and manual ACK"]
+        TRANSACTION["Begin DB transaction<br/>SELECT job FOR UPDATE<br/>Increment ResultDeliveries; detect Completed duplicates"]
+        RULES["Apply ordered business rules<br/>ID conflict / technical error / unreadable<br/>Then validate confidence against configured threshold"]
+        COMMIT["Persist fields, details, confidence and provenance<br/>Set final outcome, reasons, Completed and completedAt<br/>Commit transaction before ACK"]
+        ACKRESULT["ACK OCR result delivery<br/>Duplicate completed jobs are counted and ignored"]
+        BIZFAIL["Malformed result or unknown job: reject to DLQ<br/>Transient DB error: delay 3 seconds and requeue<br/>Shutdown: leave result unacked"]
+    end
+
+    HTTP --> VALIDATE
+    REFHTTP --> VALIDREF
+    VALIDREF -->|No| BADUPLOAD
+    VALIDREF -->|Yes| REFJOB --> SAVEDB
+    LIMITS -.-> VALIDATE
+    VALIDATE -->|No| BADUPLOAD
+    VALIDATE -->|Yes| NEWJOB --> SAVEFILES
+    SAVEFILES --> FILES
+    SAVEFILES -->|Failure| SAVEFAILED
+    SAVEFILES -->|Success| SAVEDB
+    SAVEDB --> DB
+    SAVEDB -->|After successful save| PUBLISH --> JOBS
+    PUBLISH --> PUBLISHED
+    PUBLISHED -->|Yes| ACCEPTED --> SCREENS
+    PUBLISHED -->|No| GAP
+    NOSTORAGE -.-> FILES
+    NOSTORAGE -.-> DB
+    START --> CONSUME
+    JOBS -->|Unacked delivery| CONSUME --> JOBVALID
+    JOBVALID -->|No; NACK without requeue| JOBDLQ
+    JOBVALID -->|Yes| DISPATCH
+    DISPATCH -->|Best-effort started notification| EVENTS
+    DISPATCH --> TEMP --> DOWNLOAD
+    DOWNLOAD -->|HTTP GET front and back| IMAGEGET
+    DB -->|Resolve job metadata| IMAGEGET
+    FILES -->|Read original bytes| IMAGEGET
+    IMAGEGET -->|Image response or HTTP error| PREPARED
+    PREPARED -->|No| IMAGEERROR --> MAINRESULT
+    PREPARED -->|Yes| GATE --> PIPELINE --> CLEANUP --> MAINRESULT
+    MAINRESULT --> PUBRESULT --> RESULTS
+    PUBRESULT --> CONFIRMED
+    CONFIRMED -->|Yes| ACKJOB
+    ACKJOB -->|ACK job tag| JOBS
+    CONFIRMED -->|No| REDO
+    REDO -->|Unacked jobs may be redelivered| JOBS
+    MULTIPROCESS -.-> START
+    EVENTS --> PROGRESS -->|Guarded status update| DB
+    RESULTS --> RESULTCON --> TRANSACTION
+    DB -->|Locked job row| TRANSACTION
+    TRANSACTION -->|Not already completed| RULES --> COMMIT --> DB
+    COMMIT -->|After transaction commit| ACKRESULT
+    TRANSACTION -->|Duplicate; commit delivery counter only| ACKRESULT
+    ACKRESULT -->|ACK result tag| RESULTS
+    RESULTCON -->|Handling failure| BIZFAIL
+    BIZFAIL -->|Permanent failure| RESULTDLQ
+    BIZFAIL -->|Transient failure| RESULTS
+    DB --> READJOBS --> SCREENS
+    DB --> SNAPSHOT
+    MGMT -->|Cached about 700 ms| SNAPSHOT --> DASHSTREAM -->|SSE| SCREENS
+    DB --> RESULTSTREAM -->|SSE backlog and live results| SCREENS
+    SCREENS -->|Request image preview| IMAGEGET
+    IMAGEGET -->|Original image bytes| SCREENS
+
+    classDef ui fill:#e0f2fe,stroke:#0369a1,color:#0c4a6e;
+    classDef store fill:#dcfce7,stroke:#15803d,color:#14532d;
+    classDef queue fill:#ede9fe,stroke:#7c3aed,color:#4c1d95;
+    classDef error fill:#fee2e2,stroke:#dc2626,color:#7f1d1d;
+    classDef note fill:#f1f5f9,stroke:#64748b,color:#334155;
+    class USER,FORM,HTTP,REFHTTP,ACCEPTED,SCREENS ui;
+    class FILES,DB store;
+    class JOBS,RESULTS,EVENTS queue;
+    class BADUPLOAD,SAVEFAILED,GAP,JOBDLQ,RESULTDLQ,IMAGEERROR,BIZFAIL,REDO error;
+    class LIMITS,NOSTORAGE,MULTIPROCESS,EVENTNOTE note;
