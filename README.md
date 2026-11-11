@@ -36,6 +36,20 @@ threshold and 50% overall acceptance threshold. Agreed/reconciled IDs continue;
 unresolved conflicts/unverified IDs stop. There are no automatic job retries or
 crash recovery. Each process loads its own models.
 
+For shared-model concurrency on CUDA, start one process with two job threads:
+
+```bash
+.venv/bin/python backend/ocr-worker/oracle_worker.py --workers 1 --job-concurrency 2
+```
+
+`--workers` controls model-owning processes; `--job-concurrency` controls jobs per
+process (1..8, default 1). Each job thread owns its Oracle connection. Models load
+once before threads start. CUDA/CPU pipelines overlap while YOLO access per model
+and Qari generation remain locked. Metal retains whole-document serialization.
+Qari batching remains separately configurable with `QARI_BATCH_SIZE`; this change
+does not batch crops across jobs. Start with concurrency 2 and compare throughput
+and peak memory on the same batch. Active tensors still consume extra memory.
+
 ## Package for another machine
 
 Use Python's standard library (no installed OCR dependencies needed):

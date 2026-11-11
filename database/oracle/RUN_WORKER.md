@@ -214,7 +214,15 @@ ignore rules exclude try1/outputs. Previously processed jobs are not backfilled.
   missing/invalid mappings do not independently change the score-based status.
 - Every result, including OCR_SUCCESS, still requires human review.
 
-Ctrl+C stops accepting new jobs and lets the current job finish. In multi-worker
+`--job-concurrency 2` runs two job threads per process with one shared model set.
+Use `--workers 1 --job-concurrency 2` to start with two concurrent jobs rather
+than two copies of the models. Each thread opens its own Oracle connection and
+claims rows with the same SKIP LOCKED SQL. Both options default to 1; the product
+of their values is the maximum number of active jobs. Qari generation and YOLO
+access per model remain locked; CUDA/CPU document stages can overlap. Metal keeps
+whole-document serialization. This does not implement cross-job batching.
+
+Ctrl+C stops accepting new jobs and lets all active jobs finish. In multi-worker
 mode the parent logs "Shutdown requested" and notifies workers from its normal
 supervisor loop; signal handlers only set local flags to avoid event-lock
 deadlocks. Idle polling uses local sleeps, checking shutdown every 0.2 seconds,

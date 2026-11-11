@@ -1,6 +1,7 @@
 """File/terminal mirroring and launcher metadata without Oracle or model loading."""
 from contextlib import redirect_stderr, redirect_stdout
 import io
+import importlib.util
 import logging
 import multiprocessing
 import os
@@ -35,6 +36,7 @@ class OracleLoggingTests(unittest.TestCase):
             self.assertIn('before close', path.read_text(encoding='utf-8'))
             self.assertNotIn('late console reset', path.read_text(encoding='utf-8'))
 
+    @unittest.skipUnless(importlib.util.find_spec('colorama'), 'Optional Windows console adapter not installed')
     def test_colorama_atexit_reset_has_no_closed_file_error(self):
         with tempfile.TemporaryDirectory() as directory:
             script = (

@@ -1,5 +1,6 @@
 """Offline paired-image inference used by the Oracle OCR worker."""
 import math
+from contextlib import nullcontext
 import os
 import sys
 import tempfile
@@ -169,7 +170,10 @@ def map_report(report):
 def _infer_pair(front, back, output, job_id=None):
     from pipeline.document import run_document
     options = {'document_id': job_id} if job_id is not None else {}
-    with _inference_lock:
+    # CUDA/CPU jobs can overlap. YOLO instances and Qari generation retain their
+    # own locks; digit/word CNNs are warmed, read-only eval models. Preserve the
+    # previously tested whole-document gate on Metal.
+    with (_inference_lock if DEVICE == 'mps' else nullcontext()):
         _, report = run_document(front, back, output=output, device=DEVICE, qari_device=DEVICE, **options)
     return map_report(report)
 

@@ -1,5 +1,6 @@
-"""Poll Oracle 11g work rows; each process owns its models and DB connection."""
+"""Poll Oracle 11g jobs; job threads share models, never DB connections."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from datetime import date, datetime
 import getpass
@@ -352,30 +353,59 @@ def _run_worker(args, stop, shutdown, notify_shutdown):
         (OUTPUT_ROOT / 'results').mkdir(parents=True, exist_ok=True)
         initialize()
         log.info('Retaining Oracle job images and results in %s', OUTPUT_ROOT)
-        log.info('Models ready; polling pending Oracle jobs every %.2fs', args.poll_seconds)
-        while not shutdown.requested and not stop.is_set():
-            job = claim_job(conn, oracledb)
-            if job is None:
-                wait_for_stop(stop, shutdown, args.poll_seconds)
-                continue
-            job_id, nin = job
-            log.info('Claimed job=%s', job_id)  # Do not log client IDs/images/fields.
-            try:
-                front, back = read_images(conn, nin, OUTPUT_ROOT / 'uploads', job_id=job_id)
-                out = run_ocr_paths(front, back, output=OUTPUT_ROOT / 'results', job_id=job_id)
-            except ValueError as exc:
-                out = OcrOutput('Unreadable', 0.0, details={'errorCode': str(exc)})
-            except Exception:
-                # Avoid logging driver messages which may contain sensitive SQL values.
-                log.error('Image read or inference failed for job=%s', job_id)
-                out = OcrOutput('TechnicalError', details={'errorCode': 'OCR_PROCESSING_ERROR'})
-            write_job_output(OUTPUT_ROOT, job_id, out)
-            # If DB save fails, retain the local result and exit.
-            status = save_result(conn, oracledb, job_id, out, args.confidence_threshold, storage)
-            write_job_output(OUTPUT_ROOT, job_id, out, status)
-            log.info('Completed job=%s status=%s', job_id, status)
-        notify_shutdown()
-        log.info('Stopped after finishing current job')
+        concurrency = args.job_concurrency
+        log.info('Models ready; jobConcurrency=%s; polling pending Oracle jobs every %.2fs',
+                 concurrency, args.poll_seconds)
+        if concurrency == 1:
+            consume_jobs(args, stop, shutdown, conn, oracledb, storage)
+    # Close the startup connection before opening one per job thread.
+    if concurrency > 1:
+        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix='oracle-job') as pool:
+            futures = [pool.submit(job_thread, args, stop, shutdown, storage)
+                       for _ in range(concurrency)]
+            for future in futures:
+                future.result()  # A failing thread sets stop; siblings drain active jobs.
+    notify_shutdown()
+    log.info('Stopped after finishing current jobs')
+
+
+def job_thread(args, stop, shutdown, storage):
+    try:
+        if shutdown.requested or stop.is_set():
+            return
+        # Oracle Client was initialized on the main thread before model loading.
+        import oracledb
+        with oracledb.connect(user=args.user, password=args.password, dsn=args.dsn) as conn:
+            conn.autocommit = False
+            consume_jobs(args, stop, shutdown, conn, oracledb, storage)
+    except BaseException:
+        stop.set()  # Stop new claims, let other threads finish and save their jobs.
+        raise
+
+
+def consume_jobs(args, stop, shutdown, conn, driver, storage):
+    while not shutdown.requested and not stop.is_set():
+        job = claim_job(conn, driver)
+        if job is None:
+            wait_for_stop(stop, shutdown, args.poll_seconds)
+            continue
+        job_id, nin = job
+        log.info('Claimed job=%s thread=%s', job_id, threading.current_thread().name)
+        try:
+            front, back = read_images(conn, nin, OUTPUT_ROOT / 'uploads', job_id=job_id)
+            out = run_ocr_paths(front, back, output=OUTPUT_ROOT / 'results', job_id=job_id)
+        except ValueError as exc:
+            out = OcrOutput('Unreadable', 0.0, details={'errorCode': str(exc)})
+        except Exception:
+            # Avoid logging driver messages which may contain sensitive SQL values.
+            log.error('Image read or inference failed for job=%s', job_id)
+            out = OcrOutput('TechnicalError', details={'errorCode': 'OCR_PROCESSING_ERROR'})
+        write_job_output(OUTPUT_ROOT, job_id, out)
+        # If DB save fails, retain the local result and exit.
+        status = save_result(conn, driver, job_id, out, args.confidence_threshold, storage)
+        write_job_output(OUTPUT_ROOT, job_id, out, status)
+        log.info('Completed job=%s status=%s thread=%s',
+                 job_id, status, threading.current_thread().name)
 
 
 def parse_args():
@@ -386,6 +416,8 @@ def parse_args():
     parser.add_argument('--thin', action='store_true',
                         help='Use Thin mode without Oracle Client libraries (requires Oracle 12.1+)')
     parser.add_argument('--workers', type=int, default=1, help='Model-owning processes (default: 1)')
+    parser.add_argument('--job-concurrency', type=int, default=1,
+                        help='Job threads per process, sharing one model set (default: 1)')
     parser.add_argument('--poll-seconds', type=float, default=2)
     parser.add_argument('--confidence-threshold', type=float, default=0.50)
     parser.add_argument('--check-connection', action='store_true', help='Read-only check; no model loading or claims')
@@ -394,6 +426,8 @@ def parse_args():
         parser.error('Set ORACLE_DSN or pass --dsn host:port/service_name')
     if not 1 <= args.workers <= 8:
         parser.error('--workers must be between 1 and 8')
+    if not 1 <= args.job_concurrency <= 8:
+        parser.error('--job-concurrency must be between 1 and 8')
     if not math.isfinite(args.poll_seconds) or args.poll_seconds <= 0:
         parser.error('--poll-seconds must be positive and finite')
     if not math.isfinite(args.confidence_threshold) or not 0 <= args.confidence_threshold <= 1:

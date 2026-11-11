@@ -22,7 +22,8 @@ class InferenceGateTests(unittest.TestCase):
         self.pil_patch.start()
         self.addCleanup(self.pil_patch.stop)
 
-    def test_next_job_prepares_during_inference_but_model_calls_do_not_overlap(self):
+    @patch.object(inference, 'DEVICE', 'mps')
+    def test_metal_keeps_whole_document_serialization(self):
         model_started = threading.Event()
         second_prepared = threading.Event()
         counter = threading.Lock()
@@ -64,6 +65,28 @@ class InferenceGateTests(unittest.TestCase):
         self.assertEqual([r.fields for r in results], [{'tag': 'a'}, {'tag': 'b'}])
         self.assertEqual(len(set(outputs)), 2)
         self.assertTrue(all(not directory.exists() for directory in outputs))
+
+    @patch.object(inference, 'DEVICE', 'cuda')
+    def test_cuda_documents_overlap_without_mixing_reports_or_artifacts(self):
+        together = threading.Barrier(2)
+
+        def document(front, back, **kwargs):
+            together.wait(timeout=5)  # Fails if a whole-document lock remains.
+            self.assertEqual(front.parent, back.parent)
+            return None, {'job': kwargs['document_id'], 'directory': str(kwargs['output'])}
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(inference, 'validate_image'), \
+             patch.object(inference, 'map_report', side_effect=lambda r: inference.OcrOutput('Success', fields=r)), \
+             patch.dict(sys.modules, {'pipeline.document': SimpleNamespace(run_document=document)}):
+            root = Path(directory)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(inference.run_ocr_paths, root / str(i) / 'front',
+                                       root / str(i) / 'back', root / str(i), i)
+                           for i in (1, 2)]
+                results = [f.result(timeout=10).fields for f in futures]
+        self.assertEqual([r['job'] for r in results], [1, 2])
+        self.assertNotEqual(results[0]['directory'], results[1]['directory'])
 
     def test_model_failure_releases_gate_and_cleans_up(self):
         outputs = []
