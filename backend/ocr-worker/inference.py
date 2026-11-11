@@ -265,9 +265,24 @@ def run_ocr(job):
         except (ValueError, OSError, UnidentifiedImageError, Image.DecompressionBombError,
                 Image.DecompressionBombWarning):
             return OcrOutput('Unreadable', 0.0, details={'errorCode': 'INVALID_IMAGE_PAIR'})
-        from pipeline.document import run_document
-        # Keep heavyweight model work bounded while other job threads can
-        # download/validate their own images outside this gate.
-        with _inference_lock:
-            _, report = run_document(front, back, output=output, device=DEVICE, qari_device=DEVICE)
-        return map_report(report)
+        return _infer_pair(front, back, output)
+
+
+def _infer_pair(front, back, output):
+    from pipeline.document import run_document
+    with _inference_lock:
+        _, report = run_document(front, back, output=output, device=DEVICE, qari_device=DEVICE)
+    return map_report(report)
+
+
+def run_ocr_paths(front, back):
+    """Infer an already downloaded image pair, without HTTP or RabbitMQ."""
+    from PIL import UnidentifiedImageError, Image
+    try:
+        validate_image(front)
+        validate_image(back)
+    except (ValueError, OSError, UnidentifiedImageError, Image.DecompressionBombError,
+            Image.DecompressionBombWarning):
+        return OcrOutput('Unreadable', 0.0, details={'errorCode': 'INVALID_IMAGE_PAIR'})
+    with tempfile.TemporaryDirectory(prefix='ocr-') as output:
+        return _infer_pair(front, back, output)

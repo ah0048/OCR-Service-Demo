@@ -48,7 +48,7 @@ def load_field_classifier(checkpoint):
     return PrintedFieldReader(checkpoint)
 
 
-def apply_back_classifiers(fields, models=None, threshold=0.9):
+def apply_back_classifiers(fields, models=None, threshold=0.8):
     """Classify word crops independently; preserve failures and uncertain scores."""
     if not 0 <= threshold <= 1:
         raise ValueError('Classifier threshold must be between 0 and 1')
@@ -122,7 +122,7 @@ def run_text_ocr(side_results, qari_device='cpu'):
 
 def run_document(front, back, output=PIPELINE_OUTPUT, qari=True,
                  device='cpu', qari_device='cpu', field_bank=None,
-                 classifier_models=None, classifier_threshold=0.9):
+                 classifier_models=None, classifier_threshold=0.8):
     # field_bank is retained for old callers; the template matcher is replaced.
     directory = Path(output).resolve() / ('document_' + uuid4().hex)
     directory.mkdir(parents=True)
@@ -160,12 +160,11 @@ def run_document(front, back, output=PIPELINE_OUTPUT, qari=True,
                        for side in ('front', 'back') if side in report['sides']}
     result_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    # Mandatory gate: do not spend time on text OCR and field classifiers until
-    # both independently extracted IDs are exactly equal.
+    # Continue when IDs independently agree or cross-side evidence reconciles them.
     reconcile_id_sides(report)
-    ids_match = report.get('national_id', {}).get('status') == 'agreed'
+    ids_match = report.get('national_id', {}).get('status') in ('agreed', 'reconciled')
     if not ids_match:
-        reason = ('Both sides must independently extract the same 14-digit ID '
+        reason = ('Front/back ID agreement must be agreed or reconciled '
                   'before the remaining fields are processed')
         report['pipeline'] = {'stage': 'id_validation', 'continued': False,
                               'parallel_detection': parallel_detection, 'reason': reason}

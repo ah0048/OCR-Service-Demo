@@ -1,0 +1,5 @@
+# Standalone Oracle worker: no RabbitMQ dependency.
+-r ../../try1/requirements.production.txt
+oracledb==26.1.0
+python-dotenv==1.2.1
+pi-heif==1.4.0; sys_platform == "darwin"

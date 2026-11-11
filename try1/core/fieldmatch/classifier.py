@@ -42,7 +42,7 @@ class PrintedFieldReader:
         self.model.eval()
 
     @torch.inference_mode()
-    def predict(self, crop, threshold=0.9):
+    def predict(self, crop, threshold=0.8):
         probabilities = self.model(encode_image(crop).unsqueeze(0)).softmax(1)[0]
         confidence, index = probabilities.max(0)
         label = self.classes[index.item()]

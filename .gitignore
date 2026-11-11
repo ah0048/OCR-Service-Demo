@@ -9,3 +9,5 @@ dist/
 .angular/
 .data/
 try1/images/
+.env
+.env.*
