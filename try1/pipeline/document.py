@@ -122,9 +122,10 @@ def run_text_ocr(side_results, qari_device='cpu'):
 
 def run_document(front, back, output=PIPELINE_OUTPUT, qari=True,
                  device='cpu', qari_device='cpu', field_bank=None,
-                 classifier_models=None, classifier_threshold=0.8):
+                 classifier_models=None, classifier_threshold=0.8, document_id=None):
     # field_bank is retained for old callers; the template matcher is replaced.
-    directory = Path(output).resolve() / ('document_' + uuid4().hex)
+    tag = f'{int(document_id)}_' if document_id is not None else ''
+    directory = Path(output).resolve() / ('document_' + tag + uuid4().hex)
     directory.mkdir(parents=True)
     report = {'sides': {}, 'review_required': True}
     result_path = directory / 'result.json'

@@ -11,3 +11,5 @@ dist/
 try1/images/
 .env
 .env.*
+!.env.example
+backend/ocr-worker/logs/

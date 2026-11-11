@@ -1,9 +1,0 @@
-<svg viewBox="0 0 120 120" class="donut">
-  <circle cx="60" cy="60" r="46" fill="none" stroke="#e9edf5" stroke-width="14" />
-  @for (a of arcs(); track a.label) {
-    <circle cx="60" cy="60" r="46" fill="none" [attr.stroke]="a.color" stroke-width="14" stroke-linecap="butt"
-            [attr.stroke-dasharray]="a.dash" [attr.stroke-dashoffset]="a.offset" transform="rotate(-90 60 60)" class="arc" />
-  }
-  <text x="60" y="58" text-anchor="middle" class="big">{{ centerValue() }}</text>
-  <text x="60" y="74" text-anchor="middle" class="small">{{ centerLabel() }}</text>
-</svg>

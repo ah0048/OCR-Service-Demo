@@ -1,90 +1,19 @@
-"""Direct adapter to try1: no HTTP server or image bytes in RabbitMQ."""
+"""Offline paired-image inference used by the Oracle OCR worker."""
 import math
 import os
 import sys
 import tempfile
 import threading
 import warnings
-import time
-from http.client import HTTPException
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
-from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_ROOT = Path(os.getenv('OCR_PROJECT_ROOT', str(ROOT / 'try1'))).resolve()
-IMAGE_ROOT = Path(os.getenv('OCR_IMAGE_ROOT', str(ROOT / '.data/images'))).resolve()
-MODEL_VERSION = os.getenv('OCR_MODEL_VERSION', 'egyptian-id-try1-v1')
 DEVICE = os.getenv('OCR_DEVICE', 'cpu')
-IMAGE_API_URL = os.getenv('OCR_IMAGE_API_URL', '').rstrip('/')
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 _inference_lock = threading.Lock()
-
-
-class ImageDownloadError(Exception):
-    """The image API could not be reached after bounded retries."""
-
-
-class NoImageRedirects(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-def validate_image_api_url():
-    if not IMAGE_API_URL:
-        return
-    url = urlsplit(IMAGE_API_URL)
-    if (url.scheme not in ('http', 'https') or not url.hostname or
-            url.username is not None or url.password is not None or url.query or url.fragment):
-        raise ValueError('OCR_IMAGE_API_URL must be an HTTP(S) base URL without credentials, query or fragment')
-
-
-def download_image_pair(job, directory):
-    """Fetch only fixed job-image routes; never trust a URL or path in a message."""
-    validate_image_api_url()
-    job_id = str(UUID(job['jobId']))
-    directory.mkdir(parents=True)
-    # Loopback SSH forwards must bypass any corporate/system HTTP proxy.
-    opener = build_opener(ProxyHandler({}), NoImageRedirects())
-    for side in ('front', 'back'):
-        path = directory / side
-        for attempt in range(3):
-            try:
-                with opener.open(f'{IMAGE_API_URL}/api/jobs/{job_id}/images/{side}', timeout=30) as response:
-                    length = response.headers.get('Content-Length')
-                    if length is not None and int(length) > MAX_IMAGE_BYTES:
-                        raise ValueError('Image exceeds 20 MB')
-                    total = 0
-                    with path.open('wb') as output:
-                        while chunk := response.read(64 * 1024):
-                            total += len(chunk)
-                            if total > MAX_IMAGE_BYTES:
-                                raise ValueError('Image exceeds 20 MB')
-                            output.write(chunk)
-                    if not total:
-                        raise ValueError('Image is empty')
-                    if length is not None and total != int(length):
-                        raise URLError('Incomplete image response')
-                break
-            except HTTPError as exc:
-                status = exc.code
-                exc.close()
-                if status in (404, 410):
-                    raise ValueError('Job images are unavailable') from None
-                if status not in (408, 429) and status < 500:
-                    raise ImageDownloadError('Image API rejected the download') from None
-                if attempt == 2:
-                    raise ImageDownloadError('Image API unavailable after three attempts') from None
-            except (OSError, HTTPException):
-                if attempt == 2:
-                    raise ImageDownloadError('Image API unavailable after three attempts') from None
-            if attempt < 2:
-                time.sleep(attempt + 1)
-    return directory / 'front', directory / 'back'
 
 
 @dataclass
@@ -97,7 +26,6 @@ class OcrOutput:
 
 def initialize():
     """Fail before consuming if assets/device are unavailable; cache models per process."""
-    validate_image_api_url()
     sys.path.insert(0, str(MODEL_ROOT))
     from project_config import DETECTOR_MODEL, BACK_DETECTOR_MODEL, FIELD_CLASSIFIER_MODELS
     from pipeline.front_id import load_detector, load_qari
@@ -118,19 +46,6 @@ def initialize():
     for checkpoint in FIELD_CLASSIFIER_MODELS.values():
         load_field_classifier(Path(checkpoint).resolve())
     load_qari(None, DEVICE).warm()
-
-
-def image_pair(reference):
-    """References are relative directories under the shared image store."""
-    if not isinstance(reference, str) or not reference:
-        raise ValueError('Image reference is required')
-    directory = (IMAGE_ROOT / reference).resolve()
-    if not directory.is_relative_to(IMAGE_ROOT) or directory == IMAGE_ROOT:
-        raise ValueError('Image reference is outside the image store')
-    front, back = directory / 'front', directory / 'back'
-    if not all(p.resolve().is_relative_to(IMAGE_ROOT) and p.is_file() for p in (front, back)):
-        raise ValueError('Front/back images are missing')
-    return front, back
 
 
 def validate_image(path):
@@ -251,32 +166,16 @@ def map_report(report):
     return OcrOutput(outcome, confidence, fields or None, details)
 
 
-def run_ocr(job):
-    """Prepare images independently; share one document-inference slot per process."""
-    from PIL import UnidentifiedImageError, Image
-    with tempfile.TemporaryDirectory(prefix='ocr-') as output:
-        try:
-            front, back = (download_image_pair(job, Path(output) / 'images') if IMAGE_API_URL
-                           else image_pair(job.get('imageReference')))
-            validate_image(front)
-            validate_image(back)
-        except ImageDownloadError:
-            return OcrOutput('TechnicalError', details={'errorCode': 'IMAGE_DOWNLOAD_FAILED'})
-        except (ValueError, OSError, UnidentifiedImageError, Image.DecompressionBombError,
-                Image.DecompressionBombWarning):
-            return OcrOutput('Unreadable', 0.0, details={'errorCode': 'INVALID_IMAGE_PAIR'})
-        return _infer_pair(front, back, output)
-
-
-def _infer_pair(front, back, output):
+def _infer_pair(front, back, output, job_id=None):
     from pipeline.document import run_document
+    options = {'document_id': job_id} if job_id is not None else {}
     with _inference_lock:
-        _, report = run_document(front, back, output=output, device=DEVICE, qari_device=DEVICE)
+        _, report = run_document(front, back, output=output, device=DEVICE, qari_device=DEVICE, **options)
     return map_report(report)
 
 
-def run_ocr_paths(front, back):
-    """Infer an already downloaded image pair, without HTTP or RabbitMQ."""
+def run_ocr_paths(front, back, output=None, job_id=None):
+    """Infer local images; optionally retain API-style reports/crops under output."""
     from PIL import UnidentifiedImageError, Image
     try:
         validate_image(front)
@@ -284,5 +183,8 @@ def run_ocr_paths(front, back):
     except (ValueError, OSError, UnidentifiedImageError, Image.DecompressionBombError,
             Image.DecompressionBombWarning):
         return OcrOutput('Unreadable', 0.0, details={'errorCode': 'INVALID_IMAGE_PAIR'})
-    with tempfile.TemporaryDirectory(prefix='ocr-') as output:
-        return _infer_pair(front, back, output)
+    if output is not None:
+        Path(output).mkdir(parents=True, exist_ok=True)
+        return _infer_pair(front, back, output, job_id=job_id)
+    with tempfile.TemporaryDirectory(prefix='ocr-') as temporary:
+        return _infer_pair(front, back, temporary)

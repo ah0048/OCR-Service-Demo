@@ -1,9 +1,8 @@
 # Oracle OCR test table
 
-The standalone Python worker is now available in
-`backend/ocr-worker/oracle_worker.py`; see [RUN_WORKER.md](RUN_WORKER.md) for
-connection setup, polling, multiple workers and operation. The existing RabbitMQ
-entry point is retained during this incremental migration.
+The standalone Python entry point is `backend/ocr-worker/oracle_worker.py`;
+see [RUN_WORKER.md](RUN_WORKER.md) for connection setup, polling, multiple workers
+and operation.
 
 ## Installation
 

@@ -1,5 +1,0 @@
-services:
-  front-id-api:
-    environment:
-      DEVICE: cuda
-    gpus: all

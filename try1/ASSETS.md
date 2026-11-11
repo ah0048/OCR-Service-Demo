@@ -1,14 +1,17 @@
-# Offline production assets
+# Offline model assets
 
-The Docker image contains all model assets and never downloads them at runtime.
-Before building on a new machine, copy these folders from the approved offline
-model transfer and preserve their relative paths:
+The Oracle worker loads models from local files and does not download weights
+at startup. The transfer packager includes these assets at their existing paths:
 
-- core/detector/weights/
-- core/detector/id-back detect/runs_id_back/yolo26_id_back_v2/weights/
-- core/digits/files/arabic_digit_ai/models/ (only arabic_digit_cnn.pt)
-- core/ocr_old/bundle/ (old Qari merged weights, tokenizer and processor)
-- core/fieldmatch/models/ (gender, religion and marital classifiers)
+- `core/detector/weights/best.pt`: front detector.
+- `core/detector/id-back detect/runs_id_back/yolo26_id_back_v2/weights/best.pt`: back detector.
+- `core/digits/files/arabic_digit_ai/models/arabic_digit_cnn.pt`: shared digit CNN.
+- `core/fieldmatch/models/gender/best.pt`: gender classifier.
+- `core/fieldmatch/models/religion/best.pt`: religion classifier.
+- `core/fieldmatch/models/marital/best.pt`: marital classifier.
+- `core/ocr_old/bundle/models/Qari-OCR-merged/`: merged Qari weights, tokenizer,
+  processor, configuration and accompanying model documentation.
 
-The production startup validator checks these files before loading the models.
-Do not run `git lfs pull`; these private assets are distributed separately.
+Paths above are relative to `try1/`. Model binaries are ignored by Git.
+The packager checks for missing/empty weights and Git LFS pointer placeholders.
+Keep the relative paths intact when extracting the archive.

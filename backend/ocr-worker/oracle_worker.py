@@ -1,6 +1,7 @@
 """Poll Oracle 11g work rows; each process owns its models and DB connection."""
 import argparse
-from datetime import date
+from contextlib import contextmanager, nullcontext
+from datetime import date, datetime
 import getpass
 import json
 import logging
@@ -9,19 +10,20 @@ import multiprocessing
 import os
 from pathlib import Path
 import signal
-import tempfile
 import threading
 import time
 
 from oracle_config import load_environment
+from oracle_logging import capture_console
 
 load_environment()  # OCR_DEVICE and model paths are read when inference is imported.
 
-from inference import MAX_IMAGE_BYTES, OcrOutput, initialize, run_ocr_paths
+from inference import MAX_IMAGE_BYTES, MODEL_ROOT, OcrOutput, initialize, run_ocr_paths
 
 log = logging.getLogger('oracle-ocr')
 TABLE = 'BRK_COD.CLIENT_IMAGE_OCR_JOB'
 SOURCE = 'CLIENTSOWNER.CLIENT_IMAGE_OCR'
+OUTPUT_ROOT = Path(os.getenv('ORACLE_OUTPUT_ROOT', str(MODEL_ROOT / 'outputs/oracle_workers'))).resolve()
 
 # Fetch inside PL/SQL so driver arraysize/prefetch cannot lock extra jobs.
 # No FETCH FIRST syntax: it is not supported on Oracle 11g.
@@ -75,6 +77,38 @@ def install_shutdown_handlers():
     return request
 
 
+@contextmanager
+def report_worker_shutdown(request, stop):
+    """Acknowledge Ctrl+C outside the signal handler, even during inference."""
+    finished = threading.Event()
+    reported = False
+    report_lock = threading.Lock()
+
+    def notify():
+        nonlocal reported
+        if request.requested or stop.is_set():
+            with report_lock:
+                if not reported:
+                    reported = True
+                    log.info('Shutdown requested; finishing any active job before stopping')
+
+    def report():
+        while not finished.wait(0.1):
+            if request.requested or stop.is_set():
+                notify()
+                return
+
+    reporter = threading.Thread(target=report, name='oracle-shutdown-log', daemon=True)
+    reporter.start()
+    try:
+        yield notify
+    finally:
+        finished.set()
+        reporter.join()
+        # Also cover a signal followed by a fast idle-worker exit before the poll.
+        notify()
+
+
 def wait_for_stop(stop, request, seconds):
     """Check local signals promptly without shortening the configured poll period."""
     deadline = time.monotonic() + seconds
@@ -116,9 +150,22 @@ def claim_job(conn, driver):
         raise
 
 
-def read_images(conn, nin, directory):
+def image_suffix(path):
+    """Name the original BLOB by its image signature, without re-encoding it."""
+    with path.open('rb') as source:
+        header = source.read(16)
+    for signature, suffix in [(b'\xff\xd8\xff', '.jpg'), (b'\x89PNG\r\n\x1a\n', '.png'),
+                              (b'BM', '.bmp'), (b'II*\x00', '.tiff'), (b'MM\x00*', '.tiff')]:
+        if header.startswith(signature):
+            return suffix
+    return '.webp' if header[:4] == b'RIFF' and header[8:12] == b'WEBP' else '.bin'
+
+
+def read_images(conn, nin, directory, job_id=None):
     """Read BLOB locators before closing the cursor/transaction; bound disk usage."""
     found = set()
+    paths = {}
+    directory.mkdir(parents=True, exist_ok=True)
     try:
         with conn.cursor() as cur:
             cur.execute(f'SELECT FILE_NUMBER, DOC FROM {SOURCE} '
@@ -130,7 +177,8 @@ def read_images(conn, nin, directory):
                 if blob is None or not 0 < blob.size() <= MAX_IMAGE_BYTES:
                     raise ValueError('MISSING_OR_OVERSIZED_IMAGE')
                 size = blob.size()
-                path = directory / ('front' if number == 1 else 'back')
+                name = f'{int(job_id)}_{int(number)}' if job_id is not None else ('front' if number == 1 else 'back')
+                path = directory / name
                 with path.open('wb') as output:
                     offset = 1  # Oracle LOB offsets are one-based.
                     while offset <= size:
@@ -139,11 +187,27 @@ def read_images(conn, nin, directory):
                             raise ValueError('INCOMPLETE_IMAGE_BLOB')
                         output.write(chunk)
                         offset += len(chunk)
+                if job_id is not None:
+                    named = path.with_suffix(image_suffix(path))
+                    path.replace(named)
+                    path = named
+                paths[number] = path
             if found != {1, 2}:
                 raise ValueError('MISSING_IMAGE_PAIR')
-        return directory / 'front', directory / 'back'
+        return paths[1], paths[2]
     finally:
         conn.rollback()  # End read transaction; the job claim was already committed.
+
+
+def write_job_output(root, job_id, out, status=None):
+    """Keep a readable summary even for invalid images or failed DB persistence."""
+    result = {'jobId': job_id, 'databaseStatus': status, 'ocrOutcome': out.outcome,
+              'confidence': out.confidence, 'extractedFields': out.fields, 'details': out.details}
+    destination = root / 'results' / f'{int(job_id)}.json'
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix('.json.tmp')
+    temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
+    temporary.replace(destination)
 
 
 def mapped_result(out, threshold):
@@ -258,9 +322,21 @@ def connect(args):
 
 
 def worker_main(args, stop):
-    logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s %(levelname)s pid=%(process)d %(message)s')
+    launcher_pid = getattr(args, 'launcher_pid', os.getpid())
+    context = (nullcontext() if launcher_pid == os.getpid() else
+               capture_console('worker', launcher_pid, args.log_run_id))
+    with context:
+        log.info('Worker started; worker PID=%s', os.getpid())
+        _worker_main(args, stop)
+
+
+def _worker_main(args, stop):
     shutdown = install_shutdown_handlers()
+    with report_worker_shutdown(shutdown, stop) as notify_shutdown:
+        _run_worker(args, stop, shutdown, notify_shutdown)
+
+
+def _run_worker(args, stop, shutdown, notify_shutdown):
     with connect(args)[0] as conn:
         import oracledb
         with conn.cursor() as cur:
@@ -272,7 +348,10 @@ def worker_main(args, stop):
             log.info('Oracle connection/schema read checks passed; database=%s; thick mode=%s',
                      conn.version, not oracledb.is_thin_mode())
             return
+        (OUTPUT_ROOT / 'uploads').mkdir(parents=True, exist_ok=True)
+        (OUTPUT_ROOT / 'results').mkdir(parents=True, exist_ok=True)
         initialize()
+        log.info('Retaining Oracle job images and results in %s', OUTPUT_ROOT)
         log.info('Models ready; polling pending Oracle jobs every %.2fs', args.poll_seconds)
         while not shutdown.requested and not stop.is_set():
             job = claim_job(conn, oracledb)
@@ -282,18 +361,20 @@ def worker_main(args, stop):
             job_id, nin = job
             log.info('Claimed job=%s', job_id)  # Do not log client IDs/images/fields.
             try:
-                with tempfile.TemporaryDirectory(prefix='oracle-ocr-') as directory:
-                    front, back = read_images(conn, nin, Path(directory))
-                    out = run_ocr_paths(front, back)
+                front, back = read_images(conn, nin, OUTPUT_ROOT / 'uploads', job_id=job_id)
+                out = run_ocr_paths(front, back, output=OUTPUT_ROOT / 'results', job_id=job_id)
             except ValueError as exc:
                 out = OcrOutput('Unreadable', 0.0, details={'errorCode': str(exc)})
             except Exception:
                 # Avoid logging driver messages which may contain sensitive SQL values.
                 log.error('Image read or inference failed for job=%s', job_id)
                 out = OcrOutput('TechnicalError', details={'errorCode': 'OCR_PROCESSING_ERROR'})
-            # If DB save fails, exit rather than silently consuming more work.
+            write_job_output(OUTPUT_ROOT, job_id, out)
+            # If DB save fails, retain the local result and exit.
             status = save_result(conn, oracledb, job_id, out, args.confidence_threshold, storage)
+            write_job_output(OUTPUT_ROOT, job_id, out, status)
             log.info('Completed job=%s status=%s', job_id, status)
+        notify_shutdown()
         log.info('Stopped after finishing current job')
 
 
@@ -325,6 +406,7 @@ def supervise_workers(processes, stop, shutdown):
     try:
         for process in processes:
             process.start()
+            log.info('Started worker PID=%s', process.pid)
         while any(p.is_alive() for p in processes):
             if shutdown.requested and not stop.is_set():
                 log.info('Shutdown requested; waiting for workers to finish current jobs')
@@ -345,17 +427,23 @@ def supervise_workers(processes, stop, shutdown):
 
 def main():
     args = parse_args()
-    logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s %(levelname)s pid=%(process)d %(message)s')
-    if args.workers == 1 or args.check_connection:
-        worker_main(args, threading.Event())
-        return
-    ctx = multiprocessing.get_context('spawn')
-    stop = ctx.Event()
-    shutdown = install_shutdown_handlers()
-    processes = [ctx.Process(target=worker_main, args=(args, stop)) for _ in range(args.workers)]
-    supervise_workers(processes, stop, shutdown)
-    log.info('All Oracle workers stopped')
+    args.launcher_pid = os.getpid()
+    args.log_run_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    with capture_console('launcher', args.launcher_pid, args.log_run_id) as logfile:
+        log.info('Launcher started; launcher PID=%s; requested workers=%s; log=%s',
+                 args.launcher_pid, args.workers, logfile)
+        try:
+            if args.workers == 1 or args.check_connection:
+                worker_main(args, threading.Event())
+                return
+            ctx = multiprocessing.get_context('spawn')
+            stop = ctx.Event()
+            shutdown = install_shutdown_handlers()
+            processes = [ctx.Process(target=worker_main, args=(args, stop)) for _ in range(args.workers)]
+            supervise_workers(processes, stop, shutdown)
+            log.info('All Oracle workers stopped')
+        finally:
+            log.info('Launcher stopped; launcher PID=%s', args.launcher_pid)
 
 
 if __name__ == '__main__':

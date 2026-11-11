@@ -133,8 +133,7 @@ python backend/ocr-worker/oracle_worker.py --workers 2
 
 Password is requested once per launch. `--workers` is bounded to 1..8. Each
 process loads its own models; two processes still duplicate model memory. This
-first Oracle version uses one active job per process, not the old RabbitMQ
-thread-dispatcher configuration. Start with one process on a shared GPU.
+worker uses one active job per process. Start with one process on a shared GPU.
 
 On Linux set the Oracle Client library search path before starting Python
 (for example LD_LIBRARY_PATH pointing to the 19c directory), leave
@@ -144,6 +143,61 @@ with CUDA_VISIBLE_DEVICES per launch; this launcher does not distribute processe
 across GPUs automatically.
 
 ## Outcomes and stopping
+
+Console output is also retained in `backend/ocr-worker/logs/` as UTF-8 files:
+
+```text
+oracle_<launch-timestamp>_launcher_<pid>.log
+oracle_<launch-timestamp>_worker_<pid>.log
+```
+
+The launcher prints its PID, requested process count, log location and each
+spawned worker PID. Structured log lines include both the current PID and the
+launcher PID. Each process writes a separate file to avoid simultaneous writes
+to one log. With one worker the launcher and inference share one PID/log file.
+Python stdout/stderr are mirrored to terminal and file, including weight-loading
+progress bars, warnings and unhandled exceptions. Native-library output written
+directly to OS file descriptors may bypass Python's stream capture. Password
+input occurs before capture and arguments/credentials are not dumped to logs.
+Every launch creates new log filenames; there is no automatic log deletion.
+The log folder is ignored by Git. Restart to enable logging for a running service.
+Shutdown requests are acknowledged in both single- and multi-worker mode by
+normal execution/background reporting, never by logging inside a signal handler.
+Late terminal cleanup (including Colorama atexit resets) can still write to the
+console after the file is detached and closed.
+
+Oracle workers retain API-style artifacts under `try1/outputs/oracle_workers`
+(or ORACLE_OUTPUT_ROOT if explicitly configured):
+
+```text
+oracle_workers/
+  uploads/
+    123_1.jpg                    # original front BLOB for job 123
+    123_2.png                    # original back BLOB; suffix follows real format
+  results/
+    123.json                    # readable OCR summary, including DB status
+    document_123_<unique-run>/
+      result.json               # full pipeline report with local artifact paths
+      front/
+        123_1_<timestamp>_<run>/
+          annotated.jpg
+          result.json
+          crops/
+      back/
+        123_2_<timestamp>_<run>/
+          annotated.jpg
+          result.json
+          crops/
+```
+
+The uploads are original BLOB bytes, not re-encoded images. Invalid/unknown
+formats are retained as .bin for diagnosis. Readable UTF-8 summary JSON also
+exists for image/inference errors when no pipeline report could be produced.
+Summary databaseStatus is null until the DB save succeeds. Inference artifacts
+are retained instead of deleted with a temporary directory. Reprocessing the
+same job replaces its upload/summary files but creates a new document run folder.
+Artifacts from different job IDs do not collide between workers. Existing Git
+ignore rules exclude try1/outputs. Previously processed jobs are not backfilled.
 
 - OCR_SUCCESS: inference outcome Success or LowConfidence, nonempty fields, and
   finite overall confidence at least 0.50 (50%) by default. Review flags, missing

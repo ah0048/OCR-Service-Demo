@@ -18,6 +18,29 @@ def idle_process(stop, ready):
 
 
 class ShutdownTests(unittest.TestCase):
+    def test_shutdown_is_logged_once_while_main_thread_is_busy(self):
+        request = worker.ShutdownRequest()
+        logged = threading.Event()
+        with patch.object(worker.log, 'info', side_effect=lambda *_: logged.set()) as log:
+            with worker.report_worker_shutdown(request, threading.Event()):
+                request.handle()
+                self.assertTrue(logged.wait(2))
+            log.assert_called_once()
+            self.assertIn('Shutdown requested', log.call_args.args[0])
+
+    def test_fast_idle_shutdown_is_also_logged(self):
+        request = worker.ShutdownRequest()
+        with patch.object(worker.log, 'info') as log:
+            with worker.report_worker_shutdown(request, threading.Event()):
+                request.handle()
+            log.assert_called_once()
+
+    def test_no_shutdown_message_when_no_stop_was_requested(self):
+        with patch.object(worker.log, 'info') as log:
+            with worker.report_worker_shutdown(worker.ShutdownRequest(), threading.Event()):
+                pass
+            log.assert_not_called()
+
     def test_interrupted_idle_sleep_exits_cleanly_on_shutdown(self):
         stop = threading.Event()
         request = worker.ShutdownRequest()

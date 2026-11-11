@@ -12,7 +12,7 @@ from inference import overall_confidence
 
 
 class DocumentIdGateTests(unittest.TestCase):
-    def run_pipeline(self, status):
+    def run_pipeline(self, status, job_id=None):
         def detect(source, output, **kwargs):
             output.mkdir(parents=True)
             names = ('id', 'name', 'address') if source == 'front' else document.BACK_FIELDS
@@ -44,8 +44,16 @@ class DocumentIdGateTests(unittest.TestCase):
              patch.object(document, 'run_text_ocr', side_effect=text) as text_mock, \
              patch.object(document, 'apply_expiry_date', side_effect=expiry) as expiry_mock, \
              patch.object(document, 'apply_back_classifiers', side_effect=classify) as classifier_mock:
-            _, report = document.run_document('front', 'back', output=directory)
+            path, report = document.run_document('front', 'back', output=directory, document_id=job_id)
+            if job_id is not None:
+                self.assertTrue(path.parent.name.startswith(f'document_{job_id}_'))
+                self.assertTrue(path.is_file())
+                self.assertTrue((path.parent / 'front').is_dir())
+                self.assertTrue((path.parent / 'back').is_dir())
         return report, text_mock, expiry_mock, classifier_mock
+
+    def test_oracle_job_id_is_in_document_result_folder(self):
+        self.run_pipeline('agreed', job_id=123)
 
     def test_agreed_and_reconciled_continue_all_extraction_stages(self):
         for status in ('agreed', 'reconciled'):
