@@ -1,6 +1,7 @@
 """Read front/back ID images using digits, OCR and printed-word classifiers."""
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from contextlib import ExitStack
 from functools import lru_cache
 import json
 from pathlib import Path
@@ -15,6 +16,29 @@ CONSTRAINED_BACK = ('gender', 'religion', 'marital')
 BACK_TEXT_FIELDS = ('hasband', 'job')
 FRONT_TEXT_FIELDS = ('name', 'address')
 TEXT_FIELDS_BY_SIDE = {'front': FRONT_TEXT_FIELDS, 'back': BACK_TEXT_FIELDS}
+
+
+class DocumentPools:
+    """Worker-owned stage threads; callers must drain jobs before closing."""
+
+    def __init__(self, device='cpu', job_concurrency=1):
+        self._lifetime = ExitStack()
+        try:
+            self.detection = self._lifetime.enter_context(ThreadPoolExecutor(
+                max_workers=1 if device == 'mps' else 2 * job_concurrency,
+                thread_name_prefix='id-side'))
+            self.fields = self._lifetime.enter_context(ThreadPoolExecutor(
+                max_workers=2 if device == 'mps' else 2 * job_concurrency,
+                thread_name_prefix='document-fields'))
+        except BaseException:
+            self._lifetime.close()
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return self._lifetime.__exit__(*exc)
 
 
 def apply_expiry_date(fields):
@@ -122,7 +146,17 @@ def run_text_ocr(side_results, qari_device='cpu'):
 
 def run_document(front, back, output=PIPELINE_OUTPUT, qari=True,
                  device='cpu', qari_device='cpu', field_bank=None,
-                 classifier_models=None, classifier_threshold=0.8, document_id=None):
+                 classifier_models=None, classifier_threshold=0.8, document_id=None,
+                 pools=None):
+    # Standalone callers retain scoped cleanup; services supply reusable pools.
+    with (DocumentPools(device) if pools is None else ExitStack()) as owned:
+        return _run_document(front, back, output, qari, device, qari_device,
+                             field_bank, classifier_models, classifier_threshold,
+                             document_id, pools if pools is not None else owned)
+
+
+def _run_document(front, back, output, qari, device, qari_device, field_bank,
+                  classifier_models, classifier_threshold, document_id, pools):
     # field_bank is retained for old callers; the template matcher is replaced.
     tag = f'{int(document_id)}_' if document_id is not None else ''
     directory = Path(output).resolve() / ('document_' + tag + uuid4().hex)
@@ -144,9 +178,9 @@ def run_document(front, back, output=PIPELINE_OUTPUT, qari=True,
     # PyTorch 2.13 MPS can race while two detectors initialize Metal shader
     # caches concurrently. Keep front/back detection serial on that backend.
     parallel_detection = device != 'mps'
-    with ThreadPoolExecutor(max_workers=2 if parallel_detection else 1, thread_name_prefix='id-side') as pool:
-        futures = {pool.submit(detect_side, side, source): side
-                   for side, source in (('front', front), ('back', back))}
+    futures = {pools.detection.submit(detect_side, side, source): side
+               for side, source in (('front', front), ('back', back))}
+    try:
         for future in as_completed(futures):
             side = futures[future]
             try:
@@ -156,6 +190,8 @@ def run_document(front, back, output=PIPELINE_OUTPUT, qari=True,
             except Exception as exc:
                 report['sides'][side] = {'fields': {}, 'status': 'error',
                                          'error': f'{type(exc).__name__}: {exc}'}
+    finally:
+        wait(futures)  # Never leave this job's tasks touching its report after exit.
     # Keep stable front/back ordering in JSON even though detection is parallel.
     report['sides'] = {side: report['sides'][side]
                        for side in ('front', 'back') if side in report['sides']}
@@ -197,11 +233,13 @@ def run_document(front, back, output=PIPELINE_OUTPUT, qari=True,
         return matches
 
     # Stage 2 runs independent workloads together after the ID gate passes.
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix='document-fields') as pool:
-        back_future = pool.submit(process_back_fields)
-        qari_future = pool.submit(run_text_ocr, side_results, qari_device) if qari else None
+    back_future = pools.fields.submit(process_back_fields)
+    qari_future = pools.fields.submit(run_text_ocr, side_results, qari_device) if qari else None
+    try:
         back_future.result()
         error = qari_future.result() if qari_future else None
+    finally:
+        wait([back_future, qari_future] if qari_future else [back_future])
 
     for side, (path, result) in side_results.items():
         if qari:

@@ -1,6 +1,6 @@
 """Offline paired-image inference used by the Oracle OCR worker."""
 import math
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import os
 import sys
 import tempfile
@@ -15,6 +15,23 @@ MODEL_ROOT = Path(os.getenv('OCR_PROJECT_ROOT', str(ROOT / 'try1'))).resolve()
 DEVICE = os.getenv('OCR_DEVICE', 'cpu')
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 _inference_lock = threading.Lock()
+_document_pools = None
+
+
+@contextmanager
+def document_thread_pools(job_concurrency):
+    """Own stage pools outside the job pool so nested submissions cannot deadlock."""
+    from pipeline.document import DocumentPools
+    global _document_pools
+    if _document_pools is not None:
+        raise RuntimeError('Document pools are already running in this process')
+    with DocumentPools(DEVICE, job_concurrency) as pools:
+        _document_pools = pools
+        try:
+            yield
+        finally:
+            # The worker drains its job threads before leaving this context.
+            _document_pools = None
 
 
 @dataclass
@@ -170,6 +187,8 @@ def map_report(report):
 def _infer_pair(front, back, output, job_id=None):
     from pipeline.document import run_document
     options = {'document_id': job_id} if job_id is not None else {}
+    if _document_pools is not None:
+        options['pools'] = _document_pools
     # CUDA/CPU jobs can overlap. YOLO instances and Qari generation retain their
     # own locks; digit/word CNNs are warmed, read-only eval models. Preserve the
     # previously tested whole-document gate on Metal.

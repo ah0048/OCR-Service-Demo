@@ -94,6 +94,15 @@ Python/CUDA setup before installing a second stack.
 
 ## Checks
 
+Oracle workers reuse detection and field-processing thread pools for the entire
+worker lifetime, including when `--job-concurrency 1` is used. Each process still
+loads one model set. On CPU/CUDA each stage pool allows up to twice the job
+concurrency, preserving the previous per-job parallelism; Metal keeps one
+detection thread and two field threads. The job pool is separate from both
+stage pools. Shutdown finishes active jobs before closing the stage pools.
+This bounds thread churn and reuses native inference caches; memory may still
+grow during warm-up as new image shapes are encountered.
+
 ```bash
 python -m unittest discover -s backend/ocr-worker -p 'test_*.py'
 python -m unittest discover -s scripts -p 'test_*.py'

@@ -1,7 +1,7 @@
 """Poll Oracle 11g jobs; job threads share models, never DB connections."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from datetime import date, datetime
 import getpass
 import json
@@ -19,7 +19,8 @@ from oracle_logging import capture_console
 
 load_environment()  # OCR_DEVICE and model paths are read when inference is imported.
 
-from inference import MAX_IMAGE_BYTES, MODEL_ROOT, OcrOutput, initialize, run_ocr_paths
+from inference import (MAX_IMAGE_BYTES, MODEL_ROOT, OcrOutput, initialize,
+                       document_thread_pools, run_ocr_paths)
 
 log = logging.getLogger('oracle-ocr')
 TABLE = 'BRK_COD.CLIENT_IMAGE_OCR_JOB'
@@ -338,33 +339,36 @@ def _worker_main(args, stop):
 
 
 def _run_worker(args, stop, shutdown, notify_shutdown):
-    with connect(args)[0] as conn:
-        import oracledb
-        with conn.cursor() as cur:
-            cur.execute(f'SELECT JOB_ID, NIN_CODE, STATUS, MARITAL_STATUS, RELIGION, '
-                        f'EXTRACTED_JSON, OCR_DETAILS_JSON FROM {TABLE} WHERE 1=0')
-            cur.execute(f'SELECT NIN_COD, FILE_NUMBER, DOC FROM {SOURCE} WHERE 1=0')
-        storage = load_column_storage(conn)
-        if args.check_connection:
-            log.info('Oracle connection/schema read checks passed; database=%s; thick mode=%s',
-                     conn.version, not oracledb.is_thin_mode())
-            return
-        (OUTPUT_ROOT / 'uploads').mkdir(parents=True, exist_ok=True)
-        (OUTPUT_ROOT / 'results').mkdir(parents=True, exist_ok=True)
-        initialize()
-        log.info('Retaining Oracle job images and results in %s', OUTPUT_ROOT)
-        concurrency = args.job_concurrency
-        log.info('Models ready; jobConcurrency=%s; polling pending Oracle jobs every %.2fs',
-                 concurrency, args.poll_seconds)
-        if concurrency == 1:
-            consume_jobs(args, stop, shutdown, conn, oracledb, storage)
-    # Close the startup connection before opening one per job thread.
-    if concurrency > 1:
-        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix='oracle-job') as pool:
-            futures = [pool.submit(job_thread, args, stop, shutdown, storage)
-                       for _ in range(concurrency)]
-            for future in futures:
-                future.result()  # A failing thread sets stop; siblings drain active jobs.
+    with ExitStack() as lifetime:
+        with connect(args)[0] as conn:
+            import oracledb
+            with conn.cursor() as cur:
+                cur.execute(f'SELECT JOB_ID, NIN_CODE, STATUS, MARITAL_STATUS, RELIGION, '
+                            f'EXTRACTED_JSON, OCR_DETAILS_JSON FROM {TABLE} WHERE 1=0')
+                cur.execute(f'SELECT NIN_COD, FILE_NUMBER, DOC FROM {SOURCE} WHERE 1=0')
+            storage = load_column_storage(conn)
+            if args.check_connection:
+                log.info('Oracle connection/schema read checks passed; database=%s; thick mode=%s',
+                         conn.version, not oracledb.is_thin_mode())
+                return
+            (OUTPUT_ROOT / 'uploads').mkdir(parents=True, exist_ok=True)
+            (OUTPUT_ROOT / 'results').mkdir(parents=True, exist_ok=True)
+            initialize()
+            log.info('Retaining Oracle job images and results in %s', OUTPUT_ROOT)
+            concurrency = args.job_concurrency
+            lifetime.enter_context(document_thread_pools(concurrency))
+            log.info('Persistent detection and field-processing pools ready')
+            log.info('Models ready; jobConcurrency=%s; polling pending Oracle jobs every %.2fs',
+                     concurrency, args.poll_seconds)
+            if concurrency == 1:
+                consume_jobs(args, stop, shutdown, conn, oracledb, storage)
+        # Close the startup connection before opening one per job thread.
+        if concurrency > 1:
+            with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix='oracle-job') as pool:
+                futures = [pool.submit(job_thread, args, stop, shutdown, storage)
+                           for _ in range(concurrency)]
+                for future in futures:
+                    future.result()  # A failing thread sets stop; siblings drain active jobs.
     notify_shutdown()
     log.info('Stopped after finishing current jobs')
 
