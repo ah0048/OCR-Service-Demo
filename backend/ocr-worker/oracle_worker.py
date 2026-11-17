@@ -261,7 +261,7 @@ def load_column_storage(conn):
                 for name, kind, chars, size, char_used in cur}
 
 
-def save_result(conn, driver, job_id, out, threshold, storage=None):
+def save_result(conn, driver, job_id, out, threshold, storage=None, request_id=None):
     values, errors = mapped_result(out, threshold)
     storage = storage or {}
     text_limits = {column: storage.get(column, ('VARCHAR2', limit))
@@ -299,11 +299,17 @@ def save_result(conn, driver, job_id, out, threshold, storage=None):
             cur.setinputsizes(**unicode_binds, **json_binds,
                               DATE_OF_BIRTH=driver.DB_TYPE_DATE,
                               ID_EXPIRE_DATE=driver.DB_TYPE_DATE)
+            tracking_set = ', OCR_ACK_PENDING = 1' if request_id is not None else ''
+            ownership = ' AND OCR_REQUEST_ID = :request_id' if request_id is not None else ''
+            binds = dict(values, job_id=job_id)
+            if request_id is not None:
+                binds['request_id'] = request_id
             cur.execute(f'UPDATE {TABLE} SET ' +
                         ', '.join(f'{c} = :{c}' for c in values) +
-                        ', OCR_COMPLETED_DATE = CAST(SYS_EXTRACT_UTC(SYSTIMESTAMP) AS DATE) '
-                        "WHERE JOB_ID = :job_id AND STATUS = 'UNDER_PROCESSING'",
-                        dict(values, job_id=job_id))
+                        ', OCR_COMPLETED_DATE = CAST(SYS_EXTRACT_UTC(SYSTIMESTAMP) AS DATE)' +
+                        tracking_set +
+                        " WHERE JOB_ID = :job_id AND STATUS = 'UNDER_PROCESSING'" + ownership,
+                        binds)
             if cur.rowcount != 1:
                 raise RuntimeError('Job is no longer UNDER_PROCESSING; result was not saved')
         conn.commit()

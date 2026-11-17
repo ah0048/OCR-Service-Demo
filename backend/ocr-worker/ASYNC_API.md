@@ -1,9 +1,10 @@
-# Async Spark OCR API — first implementation step
+# Async Spark OCR API
 
 This adds a standalone inference API alongside the existing Oracle worker. It
-does not change Oracle SQL, job statuses, thresholds or the OCR algorithms. The
-Oracle worker still performs inference locally: the remote coordinator, Oracle
-request-tracking migration and pending-result replay will be separate changes.
+does not change the OCR algorithms or acceptance thresholds. The original Oracle
+worker still performs inference locally. The new
+[Oracle coordinator](ORACLE_COORDINATOR.md) submits work to this API, using the
+separate request-tracking migration 005 and local pending-result replay.
 No existing Spark service is stopped or replaced by this change.
 
 ## Install and start
@@ -149,9 +150,9 @@ Temporary unavailability alone does not prove a request was lost.
 
 The future coordinator must persist request tracking in Oracle, detect a Spark
 restart, and resubmit lost requests with both images read again from Oracle.
-Do not point live producers at this API expecting durable accepted work or
-automatic Oracle recovery yet. There is no RabbitMQ dependency and no database
-connection from this service.
+The coordinator implements resubmission and collected-result replay, but the API
+itself offers no durable acceptance or exactly-once inference guarantee. There
+is no RabbitMQ dependency and no database connection from this service.
 
 ## Logs and checks
 
@@ -175,5 +176,5 @@ python -m unittest discover -s backend/ocr-worker -p 'test_ocr_api.py'
 
 Tests use small synthetic PNGs, fake inference and real job threads; they do not
 load weights, contact Oracle, or claim jobs. Real GPU/field parity and sustained
-memory tests are required when deploying this API on Spark. The next change is
-the Oracle request-tracking migration and HTTP coordinator.
+memory tests are required when deploying this API on Spark. See the coordinator
+guide for migration, SSH forwarding, startup and current recovery limitations.

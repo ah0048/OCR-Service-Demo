@@ -94,10 +94,12 @@ Python/CUDA setup before installing a second stack.
 
 ## Checks
 
-The async Spark API is available as the first step of the service split. Its
+The async Spark API is available as part of the service split. Its
 [run guide](backend/ocr-worker/ASYNC_API.md) describes installation, endpoints,
-logging, concurrency and current recovery limits. The Oracle worker still runs
-local inference; HTTP coordinator integration is not implemented yet.
+logging, concurrency and current recovery limits. The separate
+[Oracle HTTP coordinator](backend/ocr-worker/ORACLE_COORDINATOR.md) submits and
+polls requests without local model dependencies. It requires migration 005.
+The original Oracle worker remains available for local inference.
 
 Oracle workers reuse detection and field-processing thread pools for the entire
 worker lifetime, including when `--job-concurrency 1` is used. Each process still

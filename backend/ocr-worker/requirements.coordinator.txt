@@ -1,0 +1,4 @@
+# Database-connected server: no models, CUDA, Pillow or PyTorch required.
+oracledb==26.1.0
+python-dotenv==1.2.1
+httpx==0.28.1
