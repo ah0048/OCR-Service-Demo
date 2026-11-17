@@ -20,6 +20,8 @@ from inference import OcrOutput, ROOT
 from ocr_http_client import (ApiInvalidImage, ApiMissing, ApiProtocolError,
                              ApiUnavailable, OcrClient, uuid_text)
 from oracle_logging import capture_console
+from oracle_recovery import (OracleRecoveryExhausted, RetryBudget, close_connection, safe_error_code,
+                              transient_database_error)
 from oracle_requests import (claim_request, clear_ack, inspect_request,
                               mark_submitted, outstanding)
 from oracle_worker import (SOURCE, TABLE, connect, install_shutdown_handlers,
@@ -171,7 +173,6 @@ class Coordinator:
             return None
         if data['status'] == 'ACKNOWLEDGED':
             raise ApiProtocolError('ACKNOWLEDGED_BEFORE_ORACLE_COMMIT')
-        mark_submitted(self.conn, job, data['serviceInstanceId'])
         log.info('Submitted job=%s request=%s instance=%s',
                  job.job_id, job.request_id, data['serviceInstanceId'])
         return data
@@ -193,8 +194,6 @@ class Coordinator:
             data = self._submit(job, exc.instance_id)
             if data is None:
                 return
-        if job.instance_id != data['serviceInstanceId']:
-            mark_submitted(self.conn, job, data['serviceInstanceId'])
         if data['status'] == 'COMPLETED':
             out = decode_result(data.get('result'))
         elif data['status'] == 'FAILED':
@@ -202,8 +201,13 @@ class Coordinator:
         elif data['status'] == 'ACKNOWLEDGED':
             raise ApiProtocolError('ACKNOWLEDGED_BEFORE_ORACLE_COMMIT')
         else:
+            if job.instance_id != data['serviceInstanceId']:
+                mark_submitted(self.conn, job, data['serviceInstanceId'])
             return
+        # Protect a collected result before even the submission-tracking UPDATE.
         self.pending.write(job, out)
+        if job.instance_id != data['serviceInstanceId']:
+            mark_submitted(self.conn, job, data['serviceInstanceId'])
         self._persist(job, out)
 
     def cycle(self, allow_claim=True, stop_claims=lambda: False):
@@ -235,6 +239,10 @@ def parse_args():
     parser.add_argument('--max-outstanding', type=int, default=3)
     parser.add_argument('--poll-seconds', type=float, default=1)
     parser.add_argument('--retry-seconds', type=float, default=5)
+    parser.add_argument('--db-retries', type=int, default=3,
+                        help='Reconnect attempts per consecutive Oracle failure episode (default: 3)')
+    parser.add_argument('--db-retry-seconds', type=float, default=2)
+    parser.add_argument('--db-retry-max-seconds', type=float, default=30)
     parser.add_argument('--http-timeout', type=float, default=30)
     parser.add_argument('--drain-seconds', type=float, default=60)
     parser.add_argument('--confidence-threshold', type=float, default=.5)
@@ -247,7 +255,10 @@ def parse_args():
         parser.error('Set ORACLE_DSN or pass --dsn')
     if not 1 <= args.max_outstanding <= 64:
         parser.error('--max-outstanding must be 1..64')
-    for name in ('poll_seconds', 'retry_seconds', 'http_timeout', 'drain_seconds'):
+    if not 0 <= args.db_retries <= 20:
+        parser.error('--db-retries must be 0..20')
+    for name in ('poll_seconds', 'retry_seconds', 'http_timeout', 'drain_seconds',
+                 'db_retry_seconds', 'db_retry_max_seconds'):
         if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
             parser.error(name.replace('_', '-') + ' must be positive and finite')
     if not math.isfinite(args.confidence_threshold) or not 0 <= args.confidence_threshold <= 1:
@@ -259,17 +270,18 @@ def parse_args():
     return args
 
 
-def run(args):
-    api = None
-    try:
-        if not args.check_connection:
-            api = OcrClient(args.api_url, args.token, timeout=args.http_timeout)
-        if args.check_api:
-            data = api.ready()
-            log.info('OCR API ready; instance=%s', data['serviceInstanceId'])
+def run_database(args, api):
+    shutdown, stopped = install_shutdown_handlers(), threading.Event()
+    budget = RetryBudget(args.db_retries, args.db_retry_seconds, args.db_retry_max_seconds)
+    deadline, unavailable = None, False
+    pending = None if args.check_connection else PendingResults(args.pending_dir)
+    while True:
+        conn = None
+        if shutdown.requested:
+            log.info('Shutdown requested while disconnected; tracked jobs and pending results retained')
             return
-        conn, driver = connect(args)
-        with conn:
+        try:
+            conn, driver = connect(args)
             with conn.cursor() as cur:
                 cur.execute(f'SELECT OCR_REQUEST_ID, OCR_SERVICE_INSTANCE_ID, OCR_SUBMITTED_DATE, '
                             f'OCR_ACK_PENDING, EXTRACTED_JSON, OCR_DETAILS_JSON FROM {TABLE} WHERE 1=0')
@@ -278,11 +290,12 @@ def run(args):
             if args.check_connection:
                 log.info('Oracle coordinator schema checks passed; database=%s', conn.version)
                 return
-            coordinator = Coordinator(conn, driver, api, PendingResults(args.pending_dir),
+            coordinator = Coordinator(conn, driver, api, pending,
                                       storage, args.max_outstanding, args.confidence_threshold)
             coordinator.restore()
-            shutdown, stopped = install_shutdown_handlers(), threading.Event()
-            deadline, unavailable = None, False
+            if budget.used:
+                log.info('Oracle reconnected; reloaded tracked requests=%s; reconciling before new claims',
+                         len(coordinator.jobs))
             log.info('Coordinator ready; maxOutstanding=%s pollSeconds=%s pendingDir=%s; no local OCR models',
                      args.max_outstanding, args.poll_seconds, args.pending_dir)
             while True:
@@ -294,6 +307,9 @@ def run(args):
                 try:
                     coordinator.cycle(allow_claim=deadline is None,
                                       stop_claims=lambda: shutdown.requested)
+                    if budget.used:
+                        log.info('Oracle recovery confirmed; database retry budget reset')
+                        budget.recovered()
                     if unavailable:
                         log.info('OCR API connection recovered')
                     unavailable = False
@@ -305,6 +321,40 @@ def run(args):
                 # Use a fresh local request so draining does not spin after Ctrl+C.
                 wait_for_stop(stopped, shutdown if deadline is None else type(shutdown)(), delay)
             log.info('Coordinator stopped; resumable outstanding requests=%s', len(coordinator.jobs))
+            return
+        except Exception as exc:
+            if not transient_database_error(exc):
+                raise
+            # Discard this session before waiting. Rebuild state on the next one,
+            # including claims/commits which may have succeeded without a reply.
+            close_connection(conn)
+            conn = None
+            if shutdown.requested:
+                log.info('Oracle unavailable during shutdown; tracked jobs and pending results retained')
+                return
+            try:
+                delay = budget.next_delay()
+            except OracleRecoveryExhausted:
+                log.error('Oracle reconnect budget exhausted code=%s retries=%s; '
+                          'tracked jobs and pending results retained', safe_error_code(exc), budget.used)
+                raise
+            log.warning('Oracle connection failed code=%s; paused claims; reconnectAttempt=%s/%s delaySeconds=%.2f',
+                        safe_error_code(exc), budget.used, budget.retries, delay)
+            wait_for_stop(stopped, shutdown, delay)
+        finally:
+            close_connection(conn)
+
+
+def run(args):
+    api = None
+    try:
+        if not args.check_connection:
+            api = OcrClient(args.api_url, args.token, timeout=args.http_timeout)
+        if args.check_api:
+            data = api.ready()
+            log.info('OCR API ready; instance=%s', data['serviceInstanceId'])
+            return
+        run_database(args, api)
     finally:
         if api is not None:
             api.close()

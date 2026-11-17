@@ -7,8 +7,8 @@ original `oracle_worker.py` still runs local inference; choose one mode for the
 test workload. Do not run multiple coordinators against the same tracked rows.
 
 This increment adds HTTP polling/retry, durable request IDs, guarded result
-saves, local pending-result replay, restart resubmission and commit-before-ACK.
-It does not add automatic Oracle reconnection or lease-based takeover of jobs.
+saves, local pending-result replay, restart resubmission, commit-before-ACK and
+bounded Oracle reconnection. Lease-based takeover is not implemented.
 
 ## 1. Database migration
 
@@ -101,6 +101,13 @@ Useful options: `--poll-seconds 1`, `--retry-seconds 5`, `--http-timeout 30`,
 `--confidence-threshold 0.5`, `--drain-seconds 60`, and `--pending-dir PATH`.
 There are no model-worker or inference-thread settings on this process.
 
+Oracle reconnect options are `--db-retries 3`, `--db-retry-seconds 2` and
+`--db-retry-max-seconds 30`. Three retries means at most three new connection
+attempts after a failure, with default delays of 2, 4 and 8 seconds. Connection
+and database call timeouts add their own elapsed time. Set `--db-retries 0` to
+disable automatic reconnection. These options also apply to the read-only
+database check; `--check-api` never loads the Oracle driver.
+
 ## 5. Processing and recovery
 
 1. Startup reloads tracked `UNDER_PROCESSING` rows and committed rows with ACK
@@ -128,10 +135,27 @@ There are no model-worker or inference-thread settings on this process.
    ACK flag, removes the local pending file and releases its outstanding slot.
    Until then the slot stays occupied. Terminal rows already committed by that
    same attempt are recognised, including `FINISHED` rows updated by the SP.
-8. Oracle exceptions stop this version. After access is restored, restarting the
-   coordinator replays collected results from files without redoing inference.
-   Automatic reconnect/backoff within the same process is deferred. Keep pending
-   files on persistent storage and exclude them from retention cleanup.
+8. Recognised connection, listener and database-availability errors discard the
+   current session and pause claims. Reconnection reloads schema metadata,
+   tracked Oracle requests and pending files before resuming. The failed SQL is
+   not blindly replayed: a claim may already be committed, or a result may
+   already be terminal/FINISHED. Collected results can be saved without repeating
+   OCR, and already-committed results are acknowledged without another result
+   UPDATE. Submission tracking is written only after locally protecting any
+   completed result received in that response.
+9. The retry budget resets only after a full successful coordinator cycle. A
+   successful login alone does not reset it, preventing endless retries when a
+   connection opens but work immediately fails again. Exhaustion stops with
+   `ORACLE_RETRIES_EXHAUSTED`; files and tracked rows remain for restart.
+   Authentication, permission, SQL/schema, ownership, disk and API protocol
+   errors are not treated as transient database outages. Keep pending files on
+   persistent storage and exclude them from retention cleanup.
+
+Oracle 11g cannot use the driver's `isrecoverable` flag (it requires Database
+12.1+), so this version also checks an explicit list of connection/disconnection
+and availability error codes. See the driver's
+[error attribute documentation](https://python-oracledb.readthedocs.io/en/stable/api_manual/module.html#oracledb._Error.isrecoverable).
+Logs report safe codes and retry numbers rather than raw driver messages.
 
 An unknown Spark request during acknowledgement is harmless once the result is
 confirmed in Oracle: there is no result left to release. Invalid source pairs
@@ -142,6 +166,8 @@ for investigation instead of writing misleading OCR failures.
 On Ctrl+C/SIGTERM, stop claiming and drain tracked requests for up to the chosen
 drain window. HTTP calls already in progress can add their own timeout. Remaining
 requests stay tracked for the next startup; they are not reset to PENDING.
+If shutdown is requested during an Oracle outage/backoff, no further connection
+attempts are started; tracked work and pending files remain for the next run.
 
 Only one active coordinator is supported in this increment. There is no lease,
 heartbeat or automatic takeover from another coordinator. A supervised restart
@@ -165,6 +191,10 @@ The focused tests use fake Oracle state and HTTP requests against the actual API
 application with fake inference. They cover concurrency, submission-response
 loss, Spark restarts, pending replay before/after commit, SP-owned FINISHED state,
 stale ownership, capacity gating and guarded SQL. No real Oracle jobs are claimed.
+Additional outage tests exercise real coordinator reconnection with fake DB
+state: a lost claim commit, result failures before/after commit, lost ACK-flag
+commit confirmation, retry exhaustion, permanent errors and shutdown during
+backoff. They verify that collected results are not re-inferred or overwritten.
 
 ```bash
 python -m unittest discover -s backend/ocr-worker -p 'test_oracle_coordinator.py'

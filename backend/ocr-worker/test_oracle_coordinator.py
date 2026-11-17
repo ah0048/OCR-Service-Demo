@@ -24,7 +24,7 @@ from ocr_api import create_app
 from ocr_http_client import ApiMissing, ApiProtocolError, ApiUnavailable, OcrClient
 import oracle_coordinator as coordinator
 from oracle_requests import TrackedJob, claim_request, clear_ack, mark_submitted
-from oracle_worker import mapped_result, save_result
+from oracle_worker import ShutdownRequest, mapped_result, save_result
 from oracle_logging import capture_console
 
 
@@ -124,6 +124,134 @@ class CoordinatorTests(unittest.TestCase):
             worker.cycle(allow_claim=False)
             time.sleep(.01)
         self.assertFalse(worker.jobs)
+
+    def reconnecting_run(self, api, error_class):
+        """Run the real supervisor and coordinator over the fake DB fixture."""
+        args = SimpleNamespace(check_connection=False, db_retries=3, db_retry_seconds=2,
+                               db_retry_max_seconds=30, max_outstanding=1,
+                               confidence_threshold=.5, poll_seconds=.01, retry_seconds=.01,
+                               drain_seconds=5, pending_dir=self.pending.directory)
+        shutdown = ShutdownRequest()
+        connections, delays = [], []
+        driver = SimpleNamespace(Error=error_class)
+
+        def connect(_):
+            conn = MagicMock()
+            connections.append(conn)
+            return conn, driver
+
+        def wait(*args):
+            delays.append(args[2])
+            if len(delays) > 100:
+                raise AssertionError('Recovery loop did not finish')
+            if self.rows and not self.waiting and not list(self.pending.directory.glob('*.json')) and all(
+                    row.completed and not row.ack_pending for row in self.rows.values()):
+                shutdown.handle()
+            time.sleep(.001)
+
+        with patch.dict(sys.modules, {'oracledb': driver}), \
+             patch.object(coordinator, 'connect', side_effect=connect), \
+             patch.object(coordinator, 'load_column_storage', return_value={}), \
+             patch.object(coordinator, 'install_shutdown_handlers', return_value=shutdown), \
+             patch.object(coordinator, 'wait_for_stop', side_effect=wait):
+            coordinator.run_database(args, api)
+        self.assertGreaterEqual(len(connections), 2)
+        for conn in connections:
+            conn.close.assert_called_once()
+        return delays
+
+    def test_reconnect_reconciles_result_save_before_and_after_uncertain_commit(self):
+        class LostConnection(Exception):
+            pass
+
+        original_save = coordinator.save_result.side_effect
+        for position in ('before', 'after'):
+            with self.subTest(position=position):
+                self.rows.clear()
+                self.uploaded.clear()
+                self.saved.clear()
+                self.waiting = [31]
+                api, _, infer = self.api()
+                failed = False
+
+                def save(*args, **kwargs):
+                    nonlocal failed
+                    if not failed:
+                        failed = True
+                        if position == 'after':
+                            original_save(*args, **kwargs)
+                        raise LostConnection(SimpleNamespace(code=3113))
+                    return original_save(*args, **kwargs)
+
+                with patch.object(coordinator, 'save_result', side_effect=save):
+                    delays = self.reconnecting_run(api, LostConnection)
+                self.assertIn(2, delays)
+                self.assertEqual(self.saved, [31])
+                self.assertEqual(self.uploaded, [31])
+                self.assertFalse(list(self.pending.directory.glob('*.json')))
+                infer.assert_called_once()
+
+    def test_reconnect_discovers_a_claim_whose_commit_confirmation_was_lost(self):
+        class LostConnection(Exception):
+            pass
+
+        original_claim = coordinator.claim_request.side_effect
+        first_request = None
+
+        def claim(*args):
+            nonlocal first_request
+            job = original_claim(*args)
+            if job and first_request is None:
+                first_request = job.request_id  # Claim committed, reply never reached caller.
+                raise LostConnection(SimpleNamespace(code=3113))
+            return job
+
+        self.waiting = [32]
+        api, _, infer = self.api()
+        with patch.object(coordinator, 'claim_request', side_effect=claim):
+            self.reconnecting_run(api, LostConnection)
+        self.assertEqual(self.rows[32].request_id, first_request)
+        self.assertEqual(self.uploaded, [32])
+        self.assertEqual(self.saved, [32])
+        infer.assert_called_once()
+
+    def test_reconnect_after_ack_flag_commit_loss_does_not_repeat_ocr_or_save(self):
+        class LostConnection(Exception):
+            pass
+
+        original_clear = coordinator.clear_ack.side_effect
+        failed = False
+
+        def clear(*args):
+            nonlocal failed
+            original_clear(*args)
+            if not failed:
+                failed = True
+                raise LostConnection(SimpleNamespace(code=3113))
+
+        self.waiting = [33]
+        api, _, infer = self.api()
+        with patch.object(coordinator, 'clear_ack', side_effect=clear):
+            self.reconnecting_run(api, LostConnection)
+        self.assertEqual(self.saved, [33])
+        self.assertFalse(list(self.pending.directory.glob('*.json')))
+        infer.assert_called_once()
+
+    def test_collected_result_is_saved_before_submission_tracking_can_fail(self):
+        job = TrackedJob(34, '1034', str(uuid4()))
+        self.rows[34] = deepcopy(job)
+        api = Mock()
+        api.get.return_value = {'requestId': job.request_id, 'jobId': 34,
+                                'serviceInstanceId': str(uuid4()), 'status': 'COMPLETED',
+                                'result': {'ocrOutcome': 'Success', 'confidence': .9,
+                                           'extractedFields': {'fullName': 'retained'}, 'details': {}}}
+        worker = self.worker(api)
+        with patch.object(coordinator, 'mark_submitted', side_effect=RuntimeError('DB_DISCONNECTED')):
+            with self.assertRaises(RuntimeError):
+                worker.advance(job)
+        self.assertTrue(self.pending.exists(job))
+        self.assertFalse(self.saved)
+        api.acknowledge.assert_not_called()
 
     def test_three_remote_jobs_complete_without_local_model_loading(self):
         release = threading.Event()
