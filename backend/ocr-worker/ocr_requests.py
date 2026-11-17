@@ -33,7 +33,7 @@ class Request:
 
 class RequestStore:
     def __init__(self, root, concurrency, capacity, infer, validate, max_image_bytes,
-                 retain_artifacts=True, tombstone_limit=1024):
+                 retain_artifacts=True, tombstone_limit=1024, retention=None):
         if not 1 <= concurrency <= 8 or not concurrency <= capacity <= 64:
             raise ValueError('Concurrency must be 1..8; capacity must be concurrency..64')
         self.instance_id = str(uuid4())
@@ -45,6 +45,8 @@ class RequestStore:
         self._lock = threading.RLock()
         self._requests, self._acknowledged = {}, OrderedDict()
         self._pool = ThreadPoolExecutor(concurrency, thread_name_prefix='ocr-job')
+        # Direct library callers retain diagnostic behavior; the API supplies policy.
+        self.retention = retention
         self.ready = True
 
     def _view(self, item):
@@ -60,7 +62,9 @@ class RequestStore:
         with self._lock:
             counts = {state: sum(r.status == state for r in self._requests.values())
                       for state in ('UPLOADING', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')}
-            return {'ready': self.ready, 'serviceInstanceId': self.instance_id,
+            disk = self.retention.disk() if self.retention else None
+            return {'ready': self.ready and (disk is None or disk['acceptingUploads']),
+                    'serviceInstanceId': self.instance_id, 'storage': disk,
                     'capacity': self.capacity, 'outstanding': len(self._requests),
                     'requests': counts}
 
@@ -89,6 +93,8 @@ class RequestStore:
         with self._lock:
             if not self.ready:
                 raise RequestError(503, 'SERVICE_STOPPING')
+            if self.retention and not self.retention.disk()['acceptingUploads']:
+                raise RequestError(503, 'LOW_DISK_SPACE')
             existing = self._requests.get(request_id) or self._acknowledged.get(request_id)
             if existing and existing.job_id != job_id:
                 raise RequestError(409, 'REQUEST_ID_CONFLICT')
@@ -179,6 +185,15 @@ class RequestStore:
                 raise RequestError(404, 'REQUEST_NOT_FOUND')
             if item.status not in ('COMPLETED', 'FAILED'):
                 raise RequestError(409, 'REQUEST_NOT_COMPLETE')
+            if self.retention:
+                # Persist eligibility before releasing the in-memory result. A failed
+                # marker write leaves the result available for an ACK retry.
+                try:
+                    self.retention.acknowledge(item.directory)
+                except OSError:
+                    log.warning('Could not mark acknowledgement; retaining result job=%s request=%s',
+                                item.job_id, request_id)
+                    raise RequestError(503, 'ACK_STORAGE_UNAVAILABLE') from None
             item.result, item.status = None, 'ACKNOWLEDGED'
             self._acknowledged[request_id] = self._requests.pop(request_id)
             while len(self._acknowledged) > self.tombstone_limit:

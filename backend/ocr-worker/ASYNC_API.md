@@ -130,10 +130,36 @@ Pipeline results, crops and annotations are placed under that request's
 isolated by service instance and request ID; directories are private on Linux.
 The input validation is the same as the local Oracle worker.
 
-By default diagnostic artifacts remain on disk, matching current testing
-behavior. `--delete-acknowledged-artifacts` deletes a request's images and
-pipeline artifacts after acknowledgement. It never deletes an active request.
-There is no age-based cleanup of old service-instance directories in this step.
+Diagnostic artifacts remain on disk until acknowledgement and the configured
+retention age (default **168 hours / seven days after acknowledgement**).
+`--delete-acknowledged-artifacts` instead deletes a request's images and pipeline
+artifacts immediately after acknowledgement. Cleanup never age-deletes an active
+or unacknowledged request.
+
+ACK writes `.ocr-acknowledged.json` inside that request's directory, recording its
+request ID, service instance and acknowledgement time. A background sweep runs
+every 60 seconds, and once at startup, across the dedicated API output root. It
+removes only correctly named UUID directories with matching valid acknowledgement
+markers older than the cutoff. Thus eligible artifacts from older API instances
+can be cleaned after a restart. Ordinary directory/file mtimes are not evidence
+that Oracle saved a result. Unknown folders, symlinks, legacy unmarked artifacts
+and unacknowledged remnants of a crashed instance are left for manual review.
+Empty service-instance directories may remain.
+
+Configure `--artifact-retention-hours 168` and `--cleanup-interval 60` as needed.
+`--artifact-retention-hours 0` disables age-based deletion for diagnostics. Neither
+policy scans or deletes the coordinator's `.data/coordinator/pending-results`.
+This policy does not clean the original local worker's `oracle_workers` outputs.
+
+The default `--min-free-mb 1024` pauses admission when the output filesystem has
+less than 1 GiB free; `--min-free-mb 0` disables this reserve. `/health/ready`
+then returns 503 with storage information, and new uploads return 503
+`LOW_DISK_SPACE`. GET results and ACK remain available. If a marker write itself
+fails, ACK returns 503 `ACK_STORAGE_UNAVAILABLE` and the completed result remains
+in memory for retry. Do not free space by deleting unacknowledged results or local
+pending files. The reserve is an admission guard, not a disk quota or a guarantee
+against other processes filling the filesystem. Protected old artifacts can
+still require operational review.
 
 Unacknowledged result JSON is held in memory until ACK; results are not evicted
 to make room for new work. ACK releases the large result and capacity. A small
@@ -162,6 +188,17 @@ Console output is mirrored using the same logging helper as the Oracle worker:
 backend/ocr-worker/logs/ocr_api_<timestamp>_api_<PID>.log
 ```
 
+API and coordinator launchers rotate their current log at a 10 MiB threshold,
+keeping three numbered backups per run. Console output remains complete; older
+file segments are discarded. An individual oversized write can exceed the
+threshold. Configure `--log-max-mb`, `--log-backups`, `--log-retain-runs` (20) and
+`--log-retain-days` (7). At startup and clean close, only matching log families
+explicitly marked `.closed` are pruned, leaving at most the chosen number of
+closed runs and excluding those older than the age limit. Active logs, other
+prefixes and unmarked logs from abrupt process termination are not pruned. Each
+run's `.closed` file is written after console streams have been restored and the
+log is closed. Legacy Oracle worker log behavior remains unchanged by default.
+
 Lines include timestamp, level, PID, launcher PID and role. Request events also
 include job/request IDs; inference events include thread names and completion
 duration. Startup, readiness, capacity rejection, failures, acknowledgements and
@@ -178,3 +215,6 @@ Tests use small synthetic PNGs, fake inference and real job threads; they do not
 load weights, contact Oracle, or claim jobs. Real GPU/field parity and sustained
 memory tests are required when deploying this API on Spark. See the coordinator
 guide for migration, SSH forwarding, startup and current recovery limitations.
+Retention tests use disposable directories and verify that acknowledged data is
+eligible while pending/active/unrelated data remains protected; no real artifacts
+are removed by those tests.

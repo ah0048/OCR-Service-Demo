@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import threading
 import traceback
+from ocr_log_retention import ConsoleLogFile
 
 LOG_DIRECTORY = Path(__file__).resolve().parent / 'logs'
 
@@ -40,7 +41,8 @@ class ConsoleTee:
 
 
 @contextmanager
-def capture_console(role, launcher_pid, run_id, directory=LOG_DIRECTORY, prefix='oracle'):
+def capture_console(role, launcher_pid, run_id, directory=LOG_DIRECTORY, prefix='oracle',
+                    max_bytes=0, backups=3, keep_runs=20, days=7):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f'{prefix}_{run_id}_{role}_{os.getpid()}.log'
@@ -48,7 +50,7 @@ def capture_console(role, launcher_pid, run_id, directory=LOG_DIRECTORY, prefix=
     root = logging.getLogger()
     previous_handlers, previous_level = root.handlers[:], root.level
     handler = None
-    with path.open('a', encoding='utf-8', buffering=1) as logfile:
+    with ConsoleLogFile(path, max_bytes, backups, keep_runs, days, prefix) as logfile:
         lock = threading.RLock()
         stdout_tee = ConsoleTee(previous_stdout, logfile, lock)
         stderr_tee = ConsoleTee(previous_stderr, logfile, lock)

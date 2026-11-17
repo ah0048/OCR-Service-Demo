@@ -187,6 +187,15 @@ claims, submissions, commits, acknowledgements, connection pauses and shutdown.
 Credentials, images and extracted values are not printed. Oracle errors log a
 numeric Oracle code when available, without raw SQL/driver messages.
 
+The coordinator log rotates at 10 MiB with three backups per run. Closed run
+families are pruned at startup/shutdown, keeping at most 20 closed runs for up to
+seven days. Options: `--log-max-mb 10`, `--log-backups 3`, `--log-retain-runs 20`,
+`--log-retain-days 7`. Only logs explicitly marked `.closed` are eligible; active,
+unmarked and unrelated logs are preserved. A large single write can exceed the
+rotation threshold. Pending result JSON is not subject to this log cleanup or
+the Spark artifact retention policy, and is removed only after confirmed result
+persistence and acknowledgement.
+
 The focused tests use fake Oracle state and HTTP requests against the actual API
 application with fake inference. They cover concurrency, submission-response
 loss, Spark restarts, pending replay before/after commit, SP-owned FINISHED state,

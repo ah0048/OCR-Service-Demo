@@ -16,17 +16,21 @@ from fastapi import Depends, FastAPI, File, Form, Header, UploadFile
 from fastapi.responses import JSONResponse
 from inference import MAX_IMAGE_BYTES, MODEL_ROOT
 from oracle_logging import capture_console
+from ocr_log_retention import add_log_arguments, log_arguments
 from ocr_requests import RequestError, RequestStore
+from ocr_retention import ArtifactRetention
 
 log = logging.getLogger('ocr-api')
 
 
 def create_app(*, token, output, concurrency=3, capacity=6, retain_artifacts=True,
-               initialize_models=None, infer=None, validate=None, pools_factory=None):
+               initialize_models=None, infer=None, validate=None, pools_factory=None,
+               artifact_retention_hours=168, cleanup_interval=60, min_free_mb=1024):
     if not token:
         raise ValueError('Set OCR_API_TOKEN to a nonempty service credential')
     if not 1 <= concurrency <= 8 or not concurrency <= capacity <= 64:
         raise ValueError('Concurrency must be 1..8; capacity must be concurrency..64')
+    retention = ArtifactRetention(output, artifact_retention_hours, cleanup_interval, min_free_mb)
     import inference
     initialize_models = initialize_models or inference.initialize
     infer = infer or inference.run_ocr_paths
@@ -40,11 +44,15 @@ def create_app(*, token, output, concurrency=3, capacity=6, retain_artifacts=Tru
             initialize_models()
             resources.enter_context(pools_factory(concurrency))
             store = RequestStore(output, concurrency, capacity, infer, validate,
-                                 MAX_IMAGE_BYTES, retain_artifacts)
+                                 MAX_IMAGE_BYTES, retain_artifacts, retention=retention)
             resources.callback(store.close)  # Drain jobs before closing stage pools.
+            retention.start()
+            resources.callback(retention.close)
             app.state.store = store
             log.info('OCR API ready; instance=%s jobConcurrency=%s capacity=%s output=%s',
                      store.instance_id, concurrency, capacity, store.root)
+            log.info('Storage policy; acknowledgedRetentionHours=%s cleanupIntervalSeconds=%s minimumFreeMB=%s',
+                     artifact_retention_hours, cleanup_interval, min_free_mb)
             try:
                 yield
             finally:
@@ -103,6 +111,11 @@ def main():
     parser.add_argument('--capacity', type=int, default=6)
     parser.add_argument('--output', type=Path, default=MODEL_ROOT / 'outputs/ocr_api')
     parser.add_argument('--delete-acknowledged-artifacts', action='store_true')
+    parser.add_argument('--artifact-retention-hours', type=float, default=168,
+                        help='Delete acknowledged artifacts after this age; 0 disables age cleanup')
+    parser.add_argument('--cleanup-interval', type=float, default=60)
+    parser.add_argument('--min-free-mb', type=int, default=1024)
+    add_log_arguments(parser)
     args = parser.parse_args()
     token = os.getenv('OCR_API_TOKEN', '')
     if not token:
@@ -111,14 +124,20 @@ def main():
         parser.error('Concurrency must be 1..8; capacity must be concurrency..64')
     if not 1 <= args.port <= 65535:
         parser.error('Port must be 1..65535')
+    try:
+        logging_options = log_arguments(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     pid = os.getpid()
     run_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    with capture_console('api', pid, run_id, prefix='ocr_api') as logfile:
+    with capture_console('api', pid, run_id, prefix='ocr_api', **logging_options) as logfile:
         log.info('API launcher started; launcher PID=%s; log=%s', pid, logfile)
         try:
             app = create_app(token=token, output=args.output,
                              concurrency=args.job_concurrency, capacity=args.capacity,
-                             retain_artifacts=not args.delete_acknowledged_artifacts)
+                             retain_artifacts=not args.delete_acknowledged_artifacts,
+                             artifact_retention_hours=args.artifact_retention_hours,
+                             cleanup_interval=args.cleanup_interval, min_free_mb=args.min_free_mb)
             import uvicorn
             # Explicitly one process: additional API workers would duplicate models.
             # Keep our console/file handlers and avoid logging request URLs/bodies.

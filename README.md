@@ -100,6 +100,9 @@ logging, concurrency and current recovery limits. The separate
 [Oracle HTTP coordinator](backend/ocr-worker/ORACLE_COORDINATOR.md) submits and
 polls requests without local model dependencies. It requires migration 005.
 The original Oracle worker remains available for local inference.
+The async services include rotating logs; the API also has acknowledged-artifact
+retention and a low-disk admission guard. See the API guide for defaults and the
+protected data that automated cleanup deliberately leaves untouched.
 
 Oracle workers reuse detection and field-processing thread pools for the entire
 worker lifetime, including when `--job-concurrency 1` is used. Each process still

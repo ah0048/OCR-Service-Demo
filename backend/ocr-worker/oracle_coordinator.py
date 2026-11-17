@@ -20,6 +20,7 @@ from inference import OcrOutput, ROOT
 from ocr_http_client import (ApiInvalidImage, ApiMissing, ApiProtocolError,
                              ApiUnavailable, OcrClient, uuid_text)
 from oracle_logging import capture_console
+from ocr_log_retention import add_log_arguments, log_arguments
 from oracle_recovery import (OracleRecoveryExhausted, RetryBudget, close_connection, safe_error_code,
                               transient_database_error)
 from oracle_requests import (claim_request, clear_ack, inspect_request,
@@ -250,7 +251,12 @@ def parse_args():
     checks = parser.add_mutually_exclusive_group()
     checks.add_argument('--check-connection', action='store_true')
     checks.add_argument('--check-api', action='store_true')
+    add_log_arguments(parser)
     args = parser.parse_args()
+    try:
+        log_arguments(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     if not args.check_api and not args.dsn:
         parser.error('Set ORACLE_DSN or pass --dsn')
     if not 1 <= args.max_outstanding <= 64:
@@ -364,7 +370,8 @@ def main():
     args = parse_args()
     pid = os.getpid()
     run_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    with capture_console('coordinator', pid, run_id, prefix='oracle_coordinator') as logfile:
+    with capture_console('coordinator', pid, run_id, prefix='oracle_coordinator',
+                         **log_arguments(args)) as logfile:
         log.info('Coordinator launcher started; launcher PID=%s; log=%s', pid, logfile)
         try:
             run(args)
