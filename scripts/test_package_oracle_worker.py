@@ -17,6 +17,10 @@ class PackageTests(unittest.TestCase):
                                        'try1/ASSETS.md', 'try1/CUDA_README.md',
                                        'backend/ocr-worker/oracle_worker.py',
                                        'backend/ocr-worker/requirements.oracle.txt',
+                                       'backend/ocr-worker/ocr_api.py',
+                                       'backend/ocr-worker/requirements.api.txt',
+                                       'backend/ocr-worker/requirements.api-test.txt',
+                                       'backend/ocr-worker/ASYNC_API.md',
                                        'database/oracle/001_create_client_image_ocr_job.sql',
                                        'scripts/package_oracle_worker.py']
         names += list(CHECKPOINTS)
@@ -44,6 +48,8 @@ class PackageTests(unittest.TestCase):
             names = set(checked['files'])
             self.assertTrue(set(CHECKPOINTS).issubset(names))
             self.assertIn('.env.example', names)
+            self.assertIn('backend/ocr-worker/requirements.api.txt', names)
+            self.assertIn('backend/ocr-worker/ASYNC_API.md', names)
             self.assertNotIn('.env', names)
             self.assertFalse(any('/outputs/' in name or '/.git/' in name or '/logs/' in name
                                  or '/.venv/' in name or '/.cache/' in name for name in names))

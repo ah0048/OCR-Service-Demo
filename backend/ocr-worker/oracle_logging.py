@@ -40,10 +40,10 @@ class ConsoleTee:
 
 
 @contextmanager
-def capture_console(role, launcher_pid, run_id, directory=LOG_DIRECTORY):
+def capture_console(role, launcher_pid, run_id, directory=LOG_DIRECTORY, prefix='oracle'):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f'oracle_{run_id}_{role}_{os.getpid()}.log'
+    path = directory / f'{prefix}_{run_id}_{role}_{os.getpid()}.log'
     previous_stdout, previous_stderr = sys.stdout, sys.stderr
     root = logging.getLogger()
     previous_handlers, previous_level = root.handlers[:], root.level

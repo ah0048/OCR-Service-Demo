@@ -48,7 +48,7 @@ def collect_files(root, include_models=True):
     selected = {root / name for name in RUNTIME_MODULES}
     selected.update(root / name for name in ('README.md', '.env.example', '.gitignore',
                                             'try1/ASSETS.md', 'try1/CUDA_README.md'))
-    for directory, patterns in [('backend/ocr-worker', ('*.py', 'requirements.oracle.txt')),
+    for directory, patterns in [('backend/ocr-worker', ('*.py', 'requirements*.txt', '*.md')),
                                 ('database/oracle', ('*.sql', '*.md')),
                                 ('scripts', ('*.py',))]:
         for pattern in patterns:

@@ -1,0 +1,7 @@
+# GPU inference service: no Oracle Client or oracledb requirement.
+-r ../../try1/requirements.production.txt
+python-dotenv==1.2.1
+fastapi==0.163.1
+uvicorn==0.54.0
+python-multipart==0.0.34
+pi-heif==1.4.0; sys_platform == "darwin"

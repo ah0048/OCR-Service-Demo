@@ -94,6 +94,11 @@ Python/CUDA setup before installing a second stack.
 
 ## Checks
 
+The async Spark API is available as the first step of the service split. Its
+[run guide](backend/ocr-worker/ASYNC_API.md) describes installation, endpoints,
+logging, concurrency and current recovery limits. The Oracle worker still runs
+local inference; HTTP coordinator integration is not implemented yet.
+
 Oracle workers reuse detection and field-processing thread pools for the entire
 worker lifetime, including when `--job-concurrency 1` is used. Each process still
 loads one model set. On CPU/CUDA each stage pool allows up to twice the job
@@ -111,3 +116,7 @@ python -m unittest discover -s scripts -p 'test_*.py'
 The focused tests do not claim real Oracle jobs or load model weights. Local
 ignored environments, outputs, credentials and experiment folders may remain
 on the development machine; the allowlist prevents packaging them.
+
+The full worker test discovery also includes API tests. Install
+`backend/ocr-worker/requirements.api-test.txt` in the test environment before
+running it; the API test extras are not needed to run the Oracle worker itself.
